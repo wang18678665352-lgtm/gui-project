@@ -1,0 +1,19 @@
+/*
+ * app.rc — Windows 资源文件 / Windows resource file
+ *
+ * 嵌入应用清单 (app.manifest)，声明程序兼容性设置:
+ *   - 支持 Windows 通用控件 v6 (启用视觉样式/主题)
+ *   - 声明 DPI 感知等级 (PerMonitorV2)
+ *   - 支持的操作系统版本范围 (Win7 → Win10+)
+ *
+ * Embeds the application manifest declaring compatibility:
+ *   - Common Controls v6 (enables visual styles/theming)
+ *   - DPI awareness (PerMonitorV2)
+ *   - Supported OS versions (Win7 through Win10+)
+ */
+
+#include <winuser.h>
+
+/* CRT 清单资源: 链接 app.manifest 到可执行文件的 RT_MANIFEST 资源段
+   Embed the manifest as a CRT manifest resource into the executable */
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
