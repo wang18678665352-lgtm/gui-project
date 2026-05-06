@@ -702,7 +702,7 @@ static HWND CreateReminderPage(HWND hParent, RECT *rc) {
 /* ─── 接诊页面 / Consultation Page ───────────────────────────────────── */
 
 /* ConsultationPageWndProc: 选择待就诊患者 → 填写诊断+治疗建议 →
-   保存病历 → 更新预约状态为"已就诊" → 推进患者治疗阶段 → 可选开药 */
+   完成诊断 → 更新预约状态为"已就诊" → 推进患者治疗阶段 → 可选开药 */
 
 static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -717,7 +717,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
             g_lastFocusedEditId = LOWORD(wParam);
             return 0;
         }
-        if (LOWORD(wParam) == 3201) {
+        if (LOWORD(wParam) == 3204) {
             const char *did = GetDoctorId();
             if (strlen(did) == 0) {
                 MessageBoxA(GetParent(hWnd), "未找到医生信息", "错误", MB_OK | MB_ICONERROR);
@@ -760,7 +760,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                         strcmp(on->data.doctor_id, did) == 0) {
                         strcpy(savedPatientId, on->data.patient_id);
                         strcpy(savedDeptId, on->data.department_id);
-                        strcpy(on->data.status, "就诊中");
+                        strcpy(on->data.status, "已就诊");
                         found = 1;
                         break;
                     }
@@ -793,7 +793,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 }
                 strcpy(savedPatientId, appt->patient_id);
                 strcpy(savedDeptId, appt->department_id);
-                strcpy(appt->status, "就诊中");
+                strcpy(appt->status, "已就诊");
                 save_appointments_list(apps);
                 free_appointment_list(apps);
             }
@@ -835,12 +835,14 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 free_patient_list(pts);
             }
 
-            append_log(g_currentUser.username, "接诊", isOnsite ? "onsite" : "appointment", svcId, diagnosis);
+            append_log(g_currentUser.username, "完成诊断", isOnsite ? "onsite" : "appointment", svcId, diagnosis);
 
             /* 保存接诊上下文供独立按钮使用 / Store context for independent buttons */
             strcpy(g_consultPatientId, savedPatientId);
             strcpy(g_consultRecordId, rec.record_id);
 
+            MessageBoxA(GetParent(hWnd), "诊断已完成", "成功", MB_OK | MB_ICONINFORMATION);
+            g_pendingApptId[0] = 0;
             PostMessage(GetParent(hWnd), WM_APP_REFRESH, NAV_DOCTOR_CONSULTATION, 0);
         }
 
@@ -909,78 +911,9 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
             return 0;
         }
 
-        if (LOWORD(wParam) == 3204) {
-            if (g_pendingApptId[0] == 0) {
-                MessageBoxA(GetParent(hWnd), "当前没有进行中的接诊", "提示", MB_OK | MB_ICONINFORMATION);
-                return 0;
-            }
-
-            int isOnsite = (strncmp(g_pendingApptId, "OS", 2) == 0);
-            int found = 0;
-
-            if (isOnsite) {
-                OnsiteRegistrationQueue onQ = load_onsite_registration_queue();
-                OnsiteRegistrationNode *on = onQ.front;
-                while (on) {
-                    if (strcmp(on->data.onsite_id, g_pendingApptId) == 0) {
-                        if (strcmp(on->data.status, "就诊中") == 0) {
-                            strcpy(on->data.status, "已接诊");
-                            found = 1;
-                        } else {
-                            char msg[100];
-                            snprintf(msg, sizeof(msg), "当前状态为 %s，无法完成接诊", on->data.status);
-                            MessageBoxA(GetParent(hWnd), msg, "提示", MB_OK | MB_ICONINFORMATION);
-                            free_onsite_registration_queue(&onQ);
-                            return 0;
-                        }
-                        break;
-                    }
-                    on = on->next;
-                }
-                if (!found) {
-                    free_onsite_registration_queue(&onQ);
-                    MessageBoxA(GetParent(hWnd), "未找到该现场挂号记录", "错误", MB_OK | MB_ICONERROR);
-                    return 0;
-                }
-                save_onsite_registration_queue(&onQ);
-                free_onsite_registration_queue(&onQ);
-            } else {
-                AppointmentNode *apps = load_appointments_list();
-                AppointmentNode *cur = apps;
-                while (cur) {
-                    if (strcmp(cur->data.appointment_id, g_pendingApptId) == 0) {
-                        if (strcmp(cur->data.status, "就诊中") == 0) {
-                            strcpy(cur->data.status, "已完成");
-                            found = 1;
-                        } else {
-                            char msg[100];
-                            snprintf(msg, sizeof(msg), "当前状态为 %s，无法完成接诊", cur->data.status);
-                            MessageBoxA(GetParent(hWnd), msg, "提示", MB_OK | MB_ICONINFORMATION);
-                            free_appointment_list(apps);
-                            return 0;
-                        }
-                        break;
-                    }
-                    cur = cur->next;
-                }
-                if (!found) {
-                    free_appointment_list(apps);
-                    MessageBoxA(GetParent(hWnd), "未找到该预约记录", "错误", MB_OK | MB_ICONERROR);
-                    return 0;
-                }
-                save_appointments_list(apps);
-                free_appointment_list(apps);
-            }
-
-            append_log(g_currentUser.username, "完成接诊", isOnsite ? "onsite" : "appointment", g_pendingApptId, "");
-            MessageBoxA(GetParent(hWnd), "接诊已完成", "成功", MB_OK | MB_ICONINFORMATION);
-            g_pendingApptId[0] = 0;
-            PostMessage(GetParent(hWnd), WM_APP_REFRESH, NAV_DOCTOR_CONSULTATION, 0);
-        }
-
         if (LOWORD(wParam) == 3206) { /* 安排病房 / Assign Ward */
             if (g_consultPatientId[0] == 0) {
-                MessageBoxA(GetParent(hWnd), "请先保存诊断", "提示", MB_OK | MB_ICONINFORMATION);
+                MessageBoxA(GetParent(hWnd), "请先完成诊断", "提示", MB_OK | MB_ICONINFORMATION);
                 return 0;
             }
             WardNode *wards = load_wards_list();
@@ -1016,7 +949,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
 
         if (LOWORD(wParam) == 3207) { /* 开药 / Prescribe Drug */
             if (g_consultPatientId[0] == 0) {
-                MessageBoxA(GetParent(hWnd), "请先保存诊断", "提示", MB_OK | MB_ICONINFORMATION);
+                MessageBoxA(GetParent(hWnd), "请先完成诊断", "提示", MB_OK | MB_ICONINFORMATION);
                 return 0;
             }
             const char *did = GetDoctorId();
@@ -1184,15 +1117,12 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
         10, y, w, 60, hPage, (HMENU)3203, g_hInst, NULL);
     y += 68;
 
-    CreateWindowA("BUTTON", "保存诊断",
+    CreateWindowA("BUTTON", "完成诊断",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        10, y, 100, 30, hPage, (HMENU)3201, g_hInst, NULL);
+        10, y, 100, 30, hPage, (HMENU)3204, g_hInst, NULL);
     CreateWindowA("BUTTON", "使用模板",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         120, y, 100, 30, hPage, (HMENU)3205, g_hInst, NULL);
-    CreateWindowA("BUTTON", "完成接诊",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        230, y, 140, 30, hPage, (HMENU)3204, g_hInst, NULL);
     y += 35;
     CreateWindowA("BUTTON", "安排病房",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
