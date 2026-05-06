@@ -45,6 +45,7 @@
 #define WARD_CALLS_FILE DATA_DIR "/ward_calls.txt"           /* 病房呼叫记录 */
 #define MEDICAL_RECORDS_FILE DATA_DIR "/medical_records.txt" /* 病历记录 */
 #define PRESCRIPTIONS_FILE DATA_DIR "/prescriptions.txt"     /* 处方记录 */
+#define OTHER_SERVICES_FILE DATA_DIR "/other_services.txt"   /* 其他医疗服务记录 */
 #define TEMPLATES_FILE    DATA_DIR "/templates.txt"          /* 诊断/治疗/检查快捷模板 */
 #define SCHEDULES_FILE    DATA_DIR "/schedules.txt"          /* 医生排班表 */
 #define LOGS_FILE         DATA_DIR "/logs.txt"               /* 系统操作日志 */
@@ -168,7 +169,7 @@ typedef struct {
 /* 处方 — 持久化到 prescriptions.txt
    Prescription — persisted to prescriptions.txt */
 typedef struct {
-    char prescription_id[MAX_ID];   /* 处方编号 (P_yyyyMMddHHmmss_序号) */
+    char prescription_id[MAX_ID];   /* 处方编号 (PR_yyyyMMddHHmmss_序号) */
     char record_id[MAX_ID];         /* 关联病历 ID */
     char patient_id[MAX_ID];        /* 患者 ID */
     char doctor_id[MAX_ID];         /* 开具医生 ID */
@@ -178,6 +179,21 @@ typedef struct {
     char prescription_date[20];     /* 处方日期 (YYYY-MM-DD) */
     int paid;                       /* 是否已缴费 (0=未缴, 1=已缴) / Paid status */
 } Prescription;
+
+/* 其他医疗服务 — 持久化到 other_services.txt
+   Other Medical Service — persisted to other_services.txt */
+typedef struct {
+    char service_id[MAX_ID];        /* 服务编号 (MS_yyyyMMddHHmmss_序号) */
+    char record_id[MAX_ID];         /* 关联病历 ID */
+    char patient_id[MAX_ID];        /* 患者 ID */
+    char doctor_id[MAX_ID];         /* 开具医生 ID */
+    char service_name[50];          /* 服务名称: 艾灸/拔罐/针灸/推拿/理疗/... */
+    int quantity;                   /* 次数/时长 */
+    float unit_price;               /* 单价 */
+    float total_price;              /* 总价 */
+    char service_date[20];          /* 服务日期 */
+    int paid;                       /* 是否已缴费 (0=未缴, 1=已缴) */
+} OtherService;
 
 /* 诊断模板 — 持久化到 templates.txt
    Medical Template — persisted to templates.txt */
@@ -289,6 +305,11 @@ typedef struct PrescriptionNode {
     Prescription data;
     struct PrescriptionNode *next;
 } PrescriptionNode;
+
+typedef struct OtherServiceNode {
+    OtherService data;
+    struct OtherServiceNode *next;
+} OtherServiceNode;
 
 typedef struct TemplateNode {
     MedicalTemplate data;
@@ -444,6 +465,11 @@ MedicalRecord* find_records_by_patient(const char *patient_id);
 
 PrescriptionNode* load_prescriptions_list(void);
 int save_prescriptions_list(PrescriptionNode *head);
+
+OtherServiceNode* create_other_service_node(const OtherService *svc);
+void free_other_service_list(OtherServiceNode *head);
+OtherServiceNode* load_other_services_list(void);
+int save_other_services_list(OtherServiceNode *head);
 
 /* =======================  排班操作 / Schedule Operations ======================= */
 

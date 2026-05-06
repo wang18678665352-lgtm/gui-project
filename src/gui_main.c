@@ -328,7 +328,7 @@ static void PopulateNavTree(void) {
             {"紧急标记",        NAV_DOCTOR_EMERGENCY},
             {"进度更新",        NAV_DOCTOR_PROGRESS},
             {"病历模板",        NAV_DOCTOR_TEMPLATE},
-            {"开药",            NAV_DOCTOR_PRESCRIBE},
+            {"后续医疗活动",    NAV_DOCTOR_PRESCRIBE},
             {"修改密码",        NAV_DOCTOR_CHANGE_PWD},
         };
         for (int i = 0; i < (int)(sizeof(items)/sizeof(items[0])); i++) {

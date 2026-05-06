@@ -1,14 +1,14 @@
 /*
  * gui_doctor.c — Win32 GUI 医生界面实现 / Win32 GUI doctor page implementation
  *
- * 实现医生角色的所有 GUI 页面 (7 个页面 + 开药对话框):
+ * 实现医生角色的所有 GUI 页面 (8 个页面 + 开药对话框):
  *   - 待接诊 (CreateReminderPage) — 显示当前医生所有"待就诊"预约, 选中后跳转接诊
- *   - 接诊 (CreateConsultationPage) — 选择患者→填写诊断/治疗建议→保存病历→更新预约状态
+ *   - 接诊 (CreateConsultationPage) — 选择患者→填写诊断→完成诊断→开药/开病房/其他医疗服务
  *   - 病房呼叫 (CreateWardCallPage) — 查看所有病房呼叫, 标记"已响应"
  *   - 紧急标记 (CreateEmergencyPage) — 切换患者紧急状态
  *   - 进度更新 (CreateProgressPage) — 推进患者治疗阶段 (初始→诊治中→康复中→已完成)
  *   - 病历模板 (CreateTemplatePage) — 管理病历模板的 CRUD (快捷码/分类/内容)
- *   - 开药 (CreatePrescribePage) — 从病历列表选择→打开开药对话框→购物车模式添加药品
+ *   - 后续医疗活动 (CreatePrescribePage) — 查看病历→开药/开病房/其他医疗服务→查看综合诊疗详情
  *
  * 开药对话框 (DrugDispenseDlgProc): 搜索/筛选药品→添加到购物车→调整数量→确认开药
  * (逐药创建处方 + 扣减库存 + 记录审计日志)。
@@ -1864,7 +1864,7 @@ static HWND CreateTemplatePage(HWND hParent, RECT *rc) {
     return hPage;
 }
 
-/* ─── 开药与历史记录页面 / Prescribe & History Page ────────────────────────── */
+/* ─── 后续医疗活动页面 / Follow-up Medical Activities Page ──────────── */
 
 static void RefreshPrescribeList(HWND hLV, const char *filter) {
     ListView_DeleteAllItems(hLV);
@@ -1942,13 +1942,93 @@ static LRESULT CALLBACK PrescribePageWndProc(HWND hWnd, UINT msg, WPARAM wParam,
                 return 0;
             }
 
-            if (id == 3804) { /* 查看详情 */
+            if (id == 3804) { /* 查看详情 — 综合展示 */
                 MedicalRecordNode *recs = load_medical_records_list();
                 for (MedicalRecordNode *cur = recs; cur; cur = cur->next) {
                     if (strcmp(cur->data.record_id, recordId) == 0) {
-                        char msg[1024];
-                        snprintf(msg, sizeof(msg), "病历ID: %s\n患者ID: %s\n诊断日期: %s\n诊断详情: %s",
-                                 cur->data.record_id, cur->data.patient_id, cur->data.diagnosis_date, cur->data.diagnosis);
+                        char msg[2048] = "";
+                        char buf[256];
+
+                        snprintf(msg, sizeof(msg),
+                            "══════ 诊疗详情 ══════\r\n"
+                            "病历ID: %s\r\n"
+                            "患者ID: %s\r\n"
+                            "诊断日期: %s\r\n"
+                            "诊断详情: %s\r\n"
+                            "\r\n──── 处方药品 ────\r\n",
+                            cur->data.record_id, cur->data.patient_id,
+                            cur->data.diagnosis_date, cur->data.diagnosis);
+
+                        /* 查询处方药品 */
+                        PrescriptionNode *rxList = load_prescriptions_list();
+                        int rxFound = 0;
+                        if (rxList) {
+                            DrugNode *drugs = load_drugs_list();
+                            for (PrescriptionNode *rx = rxList; rx; rx = rx->next) {
+                                if (strcmp(rx->data.record_id, recordId) == 0) {
+                                    const char *drugName = rx->data.drug_id;
+                                    if (drugs) {
+                                        for (DrugNode *d = drugs; d; d = d->next) {
+                                            if (strcmp(d->data.drug_id, rx->data.drug_id) == 0)
+                                            { drugName = d->data.name; break; }
+                                        }
+                                    }
+                                    snprintf(buf, sizeof(buf), "  %s x%d  (%.2f元)\r\n",
+                                             drugName, rx->data.quantity, rx->data.total_price);
+                                    strncat(msg, buf, sizeof(msg) - strlen(msg) - 1);
+                                    rxFound++;
+                                }
+                            }
+                            if (drugs) free_drug_list(drugs);
+                            free_prescription_list(rxList);
+                        }
+                        if (!rxFound) strncat(msg, "  (无)\r\n", sizeof(msg) - strlen(msg) - 1);
+
+                        /* 查询病房安排 */
+                        strncat(msg, "\r\n──── 病房安排 ────\r\n", sizeof(msg) - strlen(msg) - 1);
+                        WardCallNode *wcList = load_ward_calls_list();
+                        int wcFound = 0;
+                        if (wcList) {
+                            WardNode *wards = load_wards_list();
+                            for (WardCallNode *wc = wcList; wc; wc = wc->next) {
+                                if (strcmp(wc->data.patient_id, cur->data.patient_id) == 0) {
+                                    const char *wardName = wc->data.ward_id;
+                                    float wardPrice = 0;
+                                    if (wards) {
+                                        for (WardNode *w = wards; w; w = w->next) {
+                                            if (strcmp(w->data.ward_id, wc->data.ward_id) == 0)
+                                            { wardName = w->data.type; wardPrice = w->data.price_per_day; break; }
+                                        }
+                                    }
+                                    snprintf(buf, sizeof(buf), "  病房: %s (%s)  费用: %.0f元/天\r\n",
+                                             wc->data.ward_id, wardName, wardPrice);
+                                    strncat(msg, buf, sizeof(msg) - strlen(msg) - 1);
+                                    wcFound++;
+                                }
+                            }
+                            if (wards) free_ward_list(wards);
+                            free_ward_call_list(wcList);
+                        }
+                        if (!wcFound) strncat(msg, "  (无)\r\n", sizeof(msg) - strlen(msg) - 1);
+
+                        /* 查询其他医疗服务 */
+                        strncat(msg, "\r\n──── 其他医疗服务 ────\r\n", sizeof(msg) - strlen(msg) - 1);
+                        OtherServiceNode *svcList = load_other_services_list();
+                        int svcFound = 0;
+                        if (svcList) {
+                            for (OtherServiceNode *sv = svcList; sv; sv = sv->next) {
+                                if (strcmp(sv->data.record_id, recordId) == 0) {
+                                    snprintf(buf, sizeof(buf), "  %s x%d  (%.2f元)\r\n",
+                                             sv->data.service_name, sv->data.quantity,
+                                             sv->data.total_price);
+                                    strncat(msg, buf, sizeof(msg) - strlen(msg) - 1);
+                                    svcFound++;
+                                }
+                            }
+                            free_other_service_list(svcList);
+                        }
+                        if (!svcFound) strncat(msg, "  (无)\r\n", sizeof(msg) - strlen(msg) - 1);
+
                         MessageBoxA(hWnd, msg, "诊疗详情", MB_OK);
                         break;
                     }

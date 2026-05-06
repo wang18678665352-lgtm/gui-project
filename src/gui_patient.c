@@ -1454,6 +1454,42 @@ static LRESULT CALLBACK PatientPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, L
                     }
                 }
                 free_ward_call_list(list);
+            } else if (strncmp(targetId, "MS", 2) == 0) {
+                /* 其他医疗服务缴费 / Other medical service payment */
+                OtherServiceNode *list = load_other_services_list();
+                for (OtherServiceNode *cur = list; cur; cur = cur->next) {
+                    if (strcmp(cur->data.service_id, targetId) == 0) {
+                        float finalPrice = cur->data.total_price;
+                        float reimbAmount = 0.0f;
+                        char reimbInfo[64] = "";
+
+                        if (useInsurance) {
+                            Patient *patient = find_patient_by_id(cur->data.patient_id);
+                            if (patient) {
+                                reimbAmount = calculate_reimbursement(cur->data.total_price, patient->patient_type);
+                                finalPrice = cur->data.total_price - reimbAmount;
+                                if (finalPrice < 0.0f) finalPrice = 0.0f;
+                                snprintf(reimbInfo, sizeof(reimbInfo),
+                                         " (医保报销: %.2f 元)", reimbAmount);
+                                free(patient);
+                            } else {
+                                snprintf(reimbInfo, sizeof(reimbInfo), " (无法获取医保信息)");
+                            }
+                        }
+
+                        char msg[256];
+                        snprintf(msg, sizeof(msg), "%s\r\n应付金额: %.2f 元%s\r\n确认支付?",
+                                 cur->data.service_name, finalPrice, reimbInfo);
+                        if (MessageBoxA(hWnd, msg, "支付确认", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                            cur->data.paid = 1;
+                            save_other_services_list(list);
+                            append_log(g_currentUser.username, "缴纳医疗服务费", "other_service", targetId, useInsurance ? "医保" : "自费");
+                            MessageBoxA(hWnd, "支付成功", "成功", MB_OK);
+                        }
+                        break;
+                    }
+                }
+                free_other_service_list(list);
             }
             PopulatePaymentList(hLV);
             return 0;
@@ -1950,7 +1986,7 @@ static HWND CreateDiagnosisPage(HWND hParent, RECT *rc) {
 
 /* ─── 缴费页面 / Payment Page ────────────────────────── */
 /* 支持多种医疗服务: 处方/挂号/病房/其他, 按ID前缀自动识别
-   Service types: PR=处方药, APT/O_=挂号, WC=病房, 未来类型只需加前缀 */
+   Service types: PR=处方药, APT/O_=挂号, WC=病房, MS=其他医疗服务 */
 
 static void PopulatePaymentList(HWND hLV) {
     ListView_DeleteAllItems(hLV);
@@ -2023,6 +2059,20 @@ static void PopulatePaymentList(HWND hLV) {
     }
     free_ward_call_list(wardCalls);
     if (wards) free_ward_list(wards);
+
+    /* 4. 待缴费其他医疗服务 / Unpaid Other Medical Services */
+    OtherServiceNode *svcList = load_other_services_list();
+    for (OtherServiceNode *cur = svcList; cur; cur = cur->next) {
+        if (strcmp(cur->data.patient_id, pid) == 0 && !cur->data.paid) {
+            char price[20];
+            snprintf(price, sizeof(price), "%.2f", cur->data.total_price);
+            char type[80];
+            snprintf(type, sizeof(type), "%s", cur->data.service_name);
+            const char *items[5] = { cur->data.service_id, type, price, cur->data.service_date, "未缴费" };
+            AddRow(hLV, row++, 5, items);
+        }
+    }
+    free_other_service_list(svcList);
 }
 
 static HWND CreatePaymentPage(HWND hParent, RECT *rc) {

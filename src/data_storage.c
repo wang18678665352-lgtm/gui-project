@@ -1746,6 +1746,81 @@ int save_prescriptions_list(PrescriptionNode *head) {
     return SUCCESS;
 }
 
+/* ─── 其他医疗服务 链表操作 / Other Medical Service List Operations ─── */
+OtherServiceNode* create_other_service_node(const OtherService *svc) {
+    OtherServiceNode *node = (OtherServiceNode *)malloc(sizeof(OtherServiceNode));
+    if (node) {
+        node->data = *svc;
+        node->next = NULL;
+    }
+    return node;
+}
+
+void free_other_service_list(OtherServiceNode *head) {
+    OtherServiceNode *current = head;
+    while (current) {
+        OtherServiceNode *next = current->next;
+        free(current);
+        current = next;
+    }
+}
+
+OtherServiceNode* load_other_services_list(void) {
+    FILE *fp = fopen(OTHER_SERVICES_FILE, "r");
+    if (!fp) return NULL;
+
+    OtherServiceNode *head = NULL, *tail = NULL;
+    char line[TEXT_LINE_SIZE];
+
+    while (read_data_line(fp, line, sizeof(line))) {
+        char *cursor = line;
+        OtherService svc;
+        memset(&svc, 0, sizeof(svc));
+        { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(svc.service_id, tk, sizeof(svc.service_id) - 1); }
+        { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(svc.record_id, tk, sizeof(svc.record_id) - 1); }
+        { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(svc.patient_id, tk, sizeof(svc.patient_id) - 1); }
+        { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(svc.doctor_id, tk, sizeof(svc.doctor_id) - 1); }
+        { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(svc.service_name, tk, sizeof(svc.service_name) - 1); }
+        svc.quantity = parse_int_token(&cursor);
+        svc.unit_price = parse_float_token(&cursor);
+        svc.total_price = parse_float_token(&cursor);
+        { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(svc.service_date, tk, sizeof(svc.service_date) - 1); }
+        svc.paid = parse_int_token(&cursor);
+
+        OtherServiceNode *node = create_other_service_node(&svc);
+        if (!node) {
+            free_other_service_list(head);
+            fclose(fp);
+            return NULL;
+        }
+        if (!head) { head = node; tail = node; }
+        else { tail->next = node; tail = node; }
+    }
+    fclose(fp);
+    return head;
+}
+
+int save_other_services_list(OtherServiceNode *head) {
+    FILE *fp = fopen(OTHER_SERVICES_FILE, "w");
+    if (!fp) return ERROR_FILE_IO;
+
+    fprintf(fp, "# service_id\trecord_id\tpatient_id\tdoctor_id\tservice_name\tquantity\tunit_price\ttotal_price\tservice_date\tpaid\n");
+    OtherServiceNode *cur = head;
+    while (cur) {
+        fprintf_escaped(fp, cur->data.service_id); fprintf(fp, "\t");
+        fprintf_escaped(fp, cur->data.record_id); fprintf(fp, "\t");
+        fprintf_escaped(fp, cur->data.patient_id); fprintf(fp, "\t");
+        fprintf_escaped(fp, cur->data.doctor_id); fprintf(fp, "\t");
+        fprintf_escaped(fp, cur->data.service_name); fprintf(fp, "\t");
+        fprintf(fp, "%d\t%.2f\t%.2f\t", cur->data.quantity, cur->data.unit_price, cur->data.total_price);
+        fprintf_escaped(fp, cur->data.service_date); fprintf(fp, "\t");
+        fprintf(fp, "%d\n", cur->data.paid);
+        cur = cur->next;
+    }
+    fclose(fp);
+    return SUCCESS;
+}
+
 /* ==========================================================================
  * 第二十八部分：查找与查询辅助函数
  * Part 28: Find & Query Helper Functions
