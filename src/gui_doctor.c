@@ -613,7 +613,7 @@ static HWND CreateReminderPage(HWND hParent, RECT *rc) {
         AppointmentNode *cur = apps;
         while (cur) {
             if (strcmp(cur->data.doctor_id, did) == 0 &&
-                strcmp(cur->data.status, "待就诊") == 0 &&
+                (strcmp(cur->data.status, "待就诊") == 0 || strcmp(cur->data.status, "就诊中") == 0) &&
                 strncmp(cur->data.appointment_date, today, 10) == 0) {
                 char dateSlot[128];
                 snprintf(dateSlot, sizeof(dateSlot), "%s %s",
@@ -793,7 +793,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 }
                 strcpy(savedPatientId, appt->patient_id);
                 strcpy(savedDeptId, appt->department_id);
-                strcpy(appt->status, "已就诊");
+                strcpy(appt->status, "就诊中");
                 save_appointments_list(apps);
                 free_appointment_list(apps);
             }
@@ -910,39 +910,69 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
         }
 
         if (LOWORD(wParam) == 3204) {
-            if (g_pendingApptId[0] == 0 || strncmp(g_pendingApptId, "OS", 2) != 0) {
-                MessageBoxA(GetParent(hWnd), "当前没有进行中的现场接诊", "提示", MB_OK | MB_ICONINFORMATION);
+            if (g_pendingApptId[0] == 0) {
+                MessageBoxA(GetParent(hWnd), "当前没有进行中的接诊", "提示", MB_OK | MB_ICONINFORMATION);
                 return 0;
             }
 
-            OnsiteRegistrationQueue onQ = load_onsite_registration_queue();
-            OnsiteRegistrationNode *on = onQ.front;
+            int isOnsite = (strncmp(g_pendingApptId, "OS", 2) == 0);
             int found = 0;
-            while (on) {
-                if (strcmp(on->data.onsite_id, g_pendingApptId) == 0) {
-                    if (strcmp(on->data.status, "就诊中") == 0) {
-                        strcpy(on->data.status, "已接诊");
-                        found = 1;
-                    } else {
-                        char msg[100];
-                        snprintf(msg, sizeof(msg), "当前状态为 %s，无法完成接诊", on->data.status);
-                        MessageBoxA(GetParent(hWnd), msg, "提示", MB_OK | MB_ICONINFORMATION);
-                        free_onsite_registration_queue(&onQ);
-                        return 0;
-                    }
-                    break;
-                }
-                on = on->next;
-            }
-            if (!found) {
-                free_onsite_registration_queue(&onQ);
-                MessageBoxA(GetParent(hWnd), "未找到该现场挂号记录", "错误", MB_OK | MB_ICONERROR);
-                return 0;
-            }
-            save_onsite_registration_queue(&onQ);
-            free_onsite_registration_queue(&onQ);
 
-            append_log(g_currentUser.username, "完成接诊", "onsite", g_pendingApptId, "");
+            if (isOnsite) {
+                OnsiteRegistrationQueue onQ = load_onsite_registration_queue();
+                OnsiteRegistrationNode *on = onQ.front;
+                while (on) {
+                    if (strcmp(on->data.onsite_id, g_pendingApptId) == 0) {
+                        if (strcmp(on->data.status, "就诊中") == 0) {
+                            strcpy(on->data.status, "已接诊");
+                            found = 1;
+                        } else {
+                            char msg[100];
+                            snprintf(msg, sizeof(msg), "当前状态为 %s，无法完成接诊", on->data.status);
+                            MessageBoxA(GetParent(hWnd), msg, "提示", MB_OK | MB_ICONINFORMATION);
+                            free_onsite_registration_queue(&onQ);
+                            return 0;
+                        }
+                        break;
+                    }
+                    on = on->next;
+                }
+                if (!found) {
+                    free_onsite_registration_queue(&onQ);
+                    MessageBoxA(GetParent(hWnd), "未找到该现场挂号记录", "错误", MB_OK | MB_ICONERROR);
+                    return 0;
+                }
+                save_onsite_registration_queue(&onQ);
+                free_onsite_registration_queue(&onQ);
+            } else {
+                AppointmentNode *apps = load_appointments_list();
+                AppointmentNode *cur = apps;
+                while (cur) {
+                    if (strcmp(cur->data.appointment_id, g_pendingApptId) == 0) {
+                        if (strcmp(cur->data.status, "就诊中") == 0) {
+                            strcpy(cur->data.status, "已完成");
+                            found = 1;
+                        } else {
+                            char msg[100];
+                            snprintf(msg, sizeof(msg), "当前状态为 %s，无法完成接诊", cur->data.status);
+                            MessageBoxA(GetParent(hWnd), msg, "提示", MB_OK | MB_ICONINFORMATION);
+                            free_appointment_list(apps);
+                            return 0;
+                        }
+                        break;
+                    }
+                    cur = cur->next;
+                }
+                if (!found) {
+                    free_appointment_list(apps);
+                    MessageBoxA(GetParent(hWnd), "未找到该预约记录", "错误", MB_OK | MB_ICONERROR);
+                    return 0;
+                }
+                save_appointments_list(apps);
+                free_appointment_list(apps);
+            }
+
+            append_log(g_currentUser.username, "完成接诊", isOnsite ? "onsite" : "appointment", g_pendingApptId, "");
             MessageBoxA(GetParent(hWnd), "接诊已完成", "成功", MB_OK | MB_ICONINFORMATION);
             g_pendingApptId[0] = 0;
             PostMessage(GetParent(hWnd), WM_APP_REFRESH, NAV_DOCTOR_CONSULTATION, 0);
@@ -1055,7 +1085,7 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
         AppointmentNode *cur = apps;
         while (cur) {
             if (strcmp(cur->data.doctor_id, did) == 0 &&
-                strcmp(cur->data.status, "待就诊") == 0 &&
+                (strcmp(cur->data.status, "待就诊") == 0 || strcmp(cur->data.status, "就诊中") == 0) &&
                 strncmp(cur->data.appointment_date, today2, 10) == 0) {
                 char dateSlot[128];
                 snprintf(dateSlot, sizeof(dateSlot), "%s %s",
@@ -1160,7 +1190,7 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
     CreateWindowA("BUTTON", "使用模板",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         120, y, 100, 30, hPage, (HMENU)3205, g_hInst, NULL);
-    CreateWindowA("BUTTON", "完成接诊 (现场)",
+    CreateWindowA("BUTTON", "完成接诊",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         230, y, 140, 30, hPage, (HMENU)3204, g_hInst, NULL);
     y += 35;
