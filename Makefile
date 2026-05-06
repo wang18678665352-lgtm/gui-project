@@ -6,7 +6,7 @@
 # ============================================================================
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -std=c99 -finput-charset=UTF-8
+CFLAGS = -Wall -Wextra -O2 -std=c99 -finput-charset=UTF-8 -fexec-charset=GBK
 LDFLAGS = -mwindows
 LIBS = -lcomctl32 -lcomdlg32 -lgdi32 -lmsimg32
 
