@@ -468,6 +468,7 @@ static int ShowDrugDispenseDialog(HWND hParent, ConsultData *data) {
 /* 用于在待接诊→接诊间传递选中的预约 ID
    Bridges selected appointment ID from reminder page to consultation page */
 static char g_pendingApptId[MAX_ID] = "";
+static int  g_lastFocusedEditId = 3202;  /* 记录模板按钮点击前最后获得焦点的编辑框 */
 
 static LRESULT CALLBACK ReminderPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -681,6 +682,11 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
         return 0;
     }
     case WM_COMMAND: {
+        if (HIWORD(wParam) == EN_SETFOCUS &&
+            (LOWORD(wParam) == 3202 || LOWORD(wParam) == 3203)) {
+            g_lastFocusedEditId = LOWORD(wParam);
+            return 0;
+        }
         if (LOWORD(wParam) == 3201) {
             const char *did = GetDoctorId();
             if (strlen(did) == 0) {
@@ -855,11 +861,8 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 return 0;
             }
 
-            /* 根据焦点选择目标编辑框: 诊断(3202) 或 治疗建议(3203) */
-            HWND hFocus = GetFocus();
-            HWND hDiag = GetDlgItem(hWnd, 3202);
-            HWND hAdvice = GetDlgItem(hWnd, 3203);
-            HWND hTarget = (hFocus == hAdvice) ? hAdvice : hDiag;
+            /* 根据最后焦点选择目标编辑框: 诊断(3202) 或 治疗建议(3203) */
+            HWND hTarget = GetDlgItem(hWnd, g_lastFocusedEditId);
             char currentText[500] = "";
             GetWindowTextA(hTarget, currentText, sizeof(currentText));
 
