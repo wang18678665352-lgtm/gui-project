@@ -645,7 +645,8 @@ static HWND CreateReminderPage(HWND hParent, RECT *rc) {
         while (on) {
             if (strcmp(on->data.doctor_id, did) == 0 &&
                 strcmp(on->data.status, "已退号") != 0 &&
-                strcmp(on->data.status, "已完成") != 0) {
+                strcmp(on->data.status, "已完成") != 0 &&
+                strcmp(on->data.status, "已就诊") != 0) {
                 const char *isEmerg = "否";
                 const char *onsPName = on->data.patient_id;
                 if (patients) {
@@ -758,6 +759,11 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 while (on) {
                     if (strcmp(on->data.onsite_id, svcId) == 0 &&
                         strcmp(on->data.doctor_id, did) == 0) {
+                        if (strcmp(on->data.status, "已就诊") == 0) {
+                            free_onsite_registration_queue(&onQ);
+                            MessageBoxA(GetParent(hWnd), "该患者已就诊，不能重复就诊", "提示", MB_OK | MB_ICONWARNING);
+                            return 0;
+                        }
                         strcpy(savedPatientId, on->data.patient_id);
                         strcpy(savedDeptId, on->data.department_id);
                         strcpy(on->data.status, "已就诊");
@@ -789,6 +795,11 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 if (!appt) {
                     if (apps) free_appointment_list(apps);
                     MessageBoxA(GetParent(hWnd), "未找到预约记录", "错误", MB_OK | MB_ICONERROR);
+                    return 0;
+                }
+                if (strcmp(appt->status, "已就诊") == 0) {
+                    free_appointment_list(apps);
+                    MessageBoxA(GetParent(hWnd), "该患者已就诊，不能重复就诊", "提示", MB_OK | MB_ICONWARNING);
                     return 0;
                 }
                 strcpy(savedPatientId, appt->patient_id);
@@ -962,6 +973,67 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
             return 0;
         }
 
+        if (LOWORD(wParam) == 3208) { /* 其他医疗服务 / Other Medical Services */
+            if (g_consultPatientId[0] == 0) {
+                MessageBoxA(GetParent(hWnd), "请先完成诊断", "提示", MB_OK | MB_ICONINFORMATION);
+                return 0;
+            }
+            const char *did = GetDoctorId();
+            struct { const char *name; float price; } services[] = {
+                {"艾灸",   30.0f},
+                {"拔罐",   25.0f},
+                {"针灸",   50.0f},
+                {"推拿",   60.0f},
+                {"理疗",   45.0f},
+                {"中药熏蒸", 40.0f},
+                {"穴位贴敷", 35.0f},
+            };
+            int nServices = sizeof(services) / sizeof(services[0]);
+            HMENU hMenu = CreatePopupMenu();
+            for (int i = 0; i < nServices; i++) {
+                char buf[100];
+                snprintf(buf, sizeof(buf), "%s  (%.0f元/次)", services[i].name, services[i].price);
+                AppendMenuA(hMenu, MF_STRING, 5100 + i, buf);
+            }
+            POINT pt; GetCursorPos(&pt);
+            int sel = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, NULL);
+            DestroyMenu(hMenu);
+            if (sel >= 5100 && sel < 5100 + nServices) {
+                int idx = sel - 5100;
+                OtherService svc;
+                memset(&svc, 0, sizeof(svc));
+                generate_id(svc.service_id, sizeof(svc.service_id), "MS");
+                strcpy(svc.record_id, g_consultRecordId);
+                strcpy(svc.patient_id, g_consultPatientId);
+                strcpy(svc.doctor_id, did);
+                strcpy(svc.service_name, services[idx].name);
+                svc.quantity = 1;
+                svc.unit_price = services[idx].price;
+                svc.total_price = services[idx].price;
+                get_current_time(svc.service_date, sizeof(svc.service_date));
+                svc.paid = 0;
+
+                OtherServiceNode *head = load_other_services_list();
+                OtherServiceNode *node = create_other_service_node(&svc);
+                if (node) {
+                    node->next = head;
+                    save_other_services_list(node);
+                    free_other_service_list(node);
+                } else if (head) {
+                    free_other_service_list(head);
+                }
+
+                char logDetail[100];
+                snprintf(logDetail, sizeof(logDetail), "%s x1", services[idx].name);
+                append_log(g_currentUser.username, "医疗服务", "other_service", svc.service_id, logDetail);
+
+                char msg[100];
+                snprintf(msg, sizeof(msg), "已添加%s (%.0f元)", services[idx].name, services[idx].price);
+                MessageBoxA(GetParent(hWnd), msg, "成功", MB_OK | MB_ICONINFORMATION);
+            }
+            return 0;
+        }
+
         return 0;
     }
     default:
@@ -1056,7 +1128,8 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
         while (on) {
             if (strcmp(on->data.doctor_id, did) == 0 &&
                 strcmp(on->data.status, "已退号") != 0 &&
-                strcmp(on->data.status, "已完成") != 0) {
+                strcmp(on->data.status, "已完成") != 0 &&
+                strcmp(on->data.status, "已就诊") != 0) {
                 const char *onsPName = on->data.patient_id;
                 if (consultPatients) {
                     PatientNode *pp = consultPatients;
@@ -1130,6 +1203,9 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
     CreateWindowA("BUTTON", "开药",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         120, y, 100, 30, hPage, (HMENU)3207, g_hInst, NULL);
+    CreateWindowA("BUTTON", "其他医疗服务",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        230, y, 110, 30, hPage, (HMENU)3208, g_hInst, NULL);
 
     /* Show a hint if there is a pending ID from reminder page */
     if (g_pendingApptId[0]) {
