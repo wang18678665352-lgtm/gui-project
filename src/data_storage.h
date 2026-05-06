@@ -138,6 +138,7 @@ typedef struct {
     char create_time[30];           /* 创建时间戳 */
     float fee;                      /* 挂号费 (元) */
     int paid;                       /* 是否已缴费 (0=未缴, 1=已缴) */
+    char ward_id[MAX_ID];           /* 分配的病房 ID (空=未分配) / assigned ward ID */
 } OnsiteRegistration;
 
 /* 病房呼叫 — 持久化到 ward_calls.txt

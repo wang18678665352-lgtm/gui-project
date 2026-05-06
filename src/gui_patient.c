@@ -2174,20 +2174,20 @@ static LRESULT CALLBACK WardCallDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
                 return 0;
             }
 
-            /* 确定患者所在病房：从患者历史呼叫记录中查找最近一次使用的病房 */
+            /* 从现场挂号记录中查找患者当前分配的病房 */
             char wardId[MAX_ID] = "";
-            WardCallNode *oldCalls = load_ward_calls_list();
-            if (oldCalls) {
-                WardCallNode *cur = oldCalls;
-                while (cur) {
-                    if (strcmp(cur->data.patient_id, GetPatientId()) == 0
-                        && cur->data.ward_id[0]) {
-                        strcpy(wardId, cur->data.ward_id);
+            {
+                OnsiteRegistrationQueue oq = load_onsite_registration_queue();
+                OnsiteRegistrationNode *orn = oq.front;
+                while (orn) {
+                    if (strcmp(orn->data.patient_id, GetPatientId()) == 0
+                        && orn->data.ward_id[0]) {
+                        strcpy(wardId, orn->data.ward_id);
                         break;
                     }
-                    cur = cur->next;
+                    orn = orn->next;
                 }
-                free_ward_call_list(oldCalls);
+                free_onsite_registration_queue(&oq);
             }
 
             char deptId[MAX_ID] = "";
@@ -2391,7 +2391,49 @@ static HWND CreateWardPage(HWND hParent, RECT *rc) {
         WS_VISIBLE | WS_CHILD | SS_LEFT,
         5, halfH + 48, 200, 20, hPage, NULL, g_hInst, NULL);
 
-    int infoY = halfH + 68;
+    /* 查找患者当前分配的病房 */
+    char myWardId[MAX_ID] = "";
+    {
+        OnsiteRegistrationQueue oq = load_onsite_registration_queue();
+        OnsiteRegistrationNode *orn = oq.front;
+        while (orn) {
+            if (strcmp(orn->data.patient_id, pid) == 0 && orn->data.ward_id[0]) {
+                strcpy(myWardId, orn->data.ward_id);
+                break;
+            }
+            orn = orn->next;
+        }
+        free_onsite_registration_queue(&oq);
+    }
+    /* 显示我的病房标签 */
+    char wardLabel[256];
+    if (myWardId[0]) {
+        const char *myWardType = myWardId;
+        float myWardPrice = 0;
+        WardNode *allWards = load_wards_list();
+        if (allWards) {
+            WardNode *w = allWards;
+            while (w) {
+                if (strcmp(w->data.ward_id, myWardId) == 0) {
+                    myWardType = w->data.type;
+                    myWardPrice = w->data.price_per_day;
+                    break;
+                }
+                w = w->next;
+            }
+            free_ward_list(allWards);
+        }
+        snprintf(wardLabel, sizeof(wardLabel), "我的病房: %s (%s) - 费用: %.0f元/天",
+                 myWardId, myWardType, myWardPrice);
+    } else {
+        snprintf(wardLabel, sizeof(wardLabel), "我的病房: 未分配");
+    }
+    int lblY = halfH + 68;
+    CreateWindowA("STATIC", wardLabel,
+        WS_VISIBLE | WS_CHILD | SS_LEFT,
+        5, lblY, w - 10, 20, hPage, NULL, g_hInst, NULL);
+
+    int infoY = lblY + 28;
     HWND hInfoLV = CreateListView(hPage, IDC_WARD_INFO_LV, 5, infoY, w - 10,
                                   h - infoY - 5);
     AddCol(hInfoLV, 0, "病房ID", 80);

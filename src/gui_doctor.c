@@ -662,20 +662,11 @@ static HWND CreateReminderPage(HWND hParent, RECT *rc) {
                         p = p->next;
                     }
                 }
-                const char *deptName = on->data.department_id;
-                if (depts) {
-                    DepartmentNode *dn = depts;
-                    while (dn) {
-                        if (strcmp(dn->data.department_id, on->data.department_id) == 0)
-                        { deptName = dn->data.name; break; }
-                        dn = dn->next;
-                    }
-                }
                 char qn[12];
                 snprintf(qn, sizeof(qn), "%d", on->data.queue_number);
                 const char *items[7] = {
                     "现场", on->data.onsite_id, onsPName,
-                    deptName, qn, on->data.status, isEmerg
+                    on->data.create_time, qn, on->data.status, isEmerg
                 };
                 AddRow(hLV, totalRow++, 7, items);
                 onsRow++;
@@ -952,6 +943,25 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 if (curW->data.remain_beds > 0) {
                     curW->data.remain_beds--;
                     save_wards_list(wards);
+                    /* 将病房分配记录到患者的现场挂号中 */
+                    {
+                        OnsiteRegistrationQueue oq = load_onsite_registration_queue();
+                        OnsiteRegistrationNode *orn = oq.front;
+                        while (orn) {
+                            if (strcmp(orn->data.patient_id, g_consultPatientId) == 0 &&
+                                (strcmp(orn->data.status, "已接诊") == 0 ||
+                                 strcmp(orn->data.status, "排队中") == 0)) {
+                                strcpy(orn->data.ward_id, curW->data.ward_id);
+                                break;
+                            }
+                            orn = orn->next;
+                        }
+                        save_onsite_registration_queue(&oq);
+                        free_onsite_registration_queue(&oq);
+                    }
+                    append_log(g_currentUser.username, "安排病房", "ward",
+                               curW->data.ward_id, g_consultPatientId);
+                    MessageBoxA(GetParent(hWnd), "病房安排成功", "提示", MB_OK);
                 } else {
                     MessageBoxA(GetParent(hWnd), "该病房已满", "提示", MB_OK);
                 }
@@ -1141,18 +1151,9 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
                         pp = pp->next;
                     }
                 }
-                const char *deptName = on->data.department_id;
-                if (consultDepts) {
-                    DepartmentNode *dn = consultDepts;
-                    while (dn) {
-                        if (strcmp(dn->data.department_id, on->data.department_id) == 0)
-                        { deptName = dn->data.name; break; }
-                        dn = dn->next;
-                    }
-                }
                 const char *items[5] = {
                     "现场", on->data.onsite_id, onsPName,
-                    deptName, on->data.status
+                    on->data.create_time, on->data.status
                 };
                 AddRow(hLV, row++, 5, items);
                 if (g_pendingApptId[0] &&
@@ -1996,32 +1997,33 @@ static LRESULT CALLBACK PrescribePageWndProc(HWND hWnd, UINT msg, WPARAM wParam,
                         }
                         if (!rxFound) strncat(msg, "  (无)\r\n", sizeof(msg) - strlen(msg) - 1);
 
-                        /* 查询病房安排 */
+                        /* 查询病房安排 — 优先从现场挂号记录中查找 */
                         strncat(msg, "\r\n──── 病房安排 ────\r\n", sizeof(msg) - strlen(msg) - 1);
-                        WardCallNode *wcList = load_ward_calls_list();
-                        int wcFound = 0;
-                        if (wcList) {
+                        int wardFound = 0;
+                        {
+                            OnsiteRegistrationQueue oq = load_onsite_registration_queue();
                             WardNode *wards = load_wards_list();
-                            for (WardCallNode *wc = wcList; wc; wc = wc->next) {
-                                if (strcmp(wc->data.patient_id, cur->data.patient_id) == 0) {
-                                    const char *wardName = wc->data.ward_id;
+                            for (OnsiteRegistrationNode *orn = oq.front; orn; orn = orn->next) {
+                                if (strcmp(orn->data.patient_id, cur->data.patient_id) == 0
+                                    && orn->data.ward_id[0]) {
+                                    const char *wardName = orn->data.ward_id;
                                     float wardPrice = 0;
                                     if (wards) {
                                         for (WardNode *w = wards; w; w = w->next) {
-                                            if (strcmp(w->data.ward_id, wc->data.ward_id) == 0)
+                                            if (strcmp(w->data.ward_id, orn->data.ward_id) == 0)
                                             { wardName = w->data.type; wardPrice = w->data.price_per_day; break; }
                                         }
                                     }
                                     snprintf(buf, sizeof(buf), "  病房: %s (%s)  费用: %.0f元/天\r\n",
-                                             wc->data.ward_id, wardName, wardPrice);
+                                             orn->data.ward_id, wardName, wardPrice);
                                     strncat(msg, buf, sizeof(msg) - strlen(msg) - 1);
-                                    wcFound++;
+                                    wardFound++;
                                 }
                             }
                             if (wards) free_ward_list(wards);
-                            free_ward_call_list(wcList);
+                            free_onsite_registration_queue(&oq);
                         }
-                        if (!wcFound) strncat(msg, "  (无)\r\n", sizeof(msg) - strlen(msg) - 1);
+                        if (!wardFound) strncat(msg, "  (无)\r\n", sizeof(msg) - strlen(msg) - 1);
 
                         /* 查询其他医疗服务 */
                         strncat(msg, "\r\n──── 其他医疗服务 ────\r\n", sizeof(msg) - strlen(msg) - 1);

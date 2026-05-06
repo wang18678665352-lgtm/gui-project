@@ -1339,6 +1339,7 @@ OnsiteRegistrationQueue load_onsite_registration_queue(void) {
         { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(registration.create_time, tk, sizeof(registration.create_time) - 1); }
         registration.fee = parse_float_token(&cursor);
         registration.paid = parse_int_token(&cursor);
+        { char *tk = next_token(&cursor); if (tk) { unescape_field_inplace(tk); strncpy(registration.ward_id, tk, sizeof(registration.ward_id) - 1); } }
 
         /* 按文件顺序追加入队（队尾） / Enqueue in file order (rear append) */
         if (enqueue_onsite_registration(&queue, &registration, false) != SUCCESS) {
@@ -1359,7 +1360,7 @@ int save_onsite_registration_queue(const OnsiteRegistrationQueue *queue) {
         return ERROR_FILE_IO;
     }
 
-    fprintf(fp, "# onsite_id\tpatient_id\tdoctor_id\tdepartment_id\tqueue_number\tstatus\tcreate_time\tfee\tpaid\n");
+    fprintf(fp, "# onsite_id\tpatient_id\tdoctor_id\tdepartment_id\tqueue_number\tstatus\tcreate_time\tfee\tpaid\tward_id\n");
     /* 从队首开始遍历，保持队列顺序 / Traverse from front to preserve queue order */
     current = queue ? queue->front : NULL;
     while (current) {
@@ -1370,7 +1371,8 @@ int save_onsite_registration_queue(const OnsiteRegistrationQueue *queue) {
         fprintf(fp, "%d\t", current->data.queue_number);
         fprintf_escaped(fp, current->data.status); fprintf(fp, "\t");
         fprintf_escaped(fp, current->data.create_time); fprintf(fp, "\t");
-        fprintf(fp, "%.2f\t%d\n", current->data.fee, current->data.paid);
+        fprintf(fp, "%.2f\t%d\t", current->data.fee, current->data.paid);
+        fprintf_escaped(fp, current->data.ward_id); fprintf(fp, "\n");
         current = current->next;
     }
 
