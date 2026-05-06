@@ -813,12 +813,21 @@ static void RefreshRegDates(HWND hDlg, const char *docId) {
     SendMessage(hDate, CB_RESETCONTENT, 0, 0);
     if (!docId || !docId[0]) return;
 
+    /* 获取今天的日期，用于过滤已过的日期 */
+    time_t now = time(NULL);
+    struct tm tmNow;
+    memcpy(&tmNow, localtime(&now), sizeof(tmNow));
+    char todayStr[12];
+    snprintf(todayStr, sizeof(todayStr), "%04d-%02d-%02d",
+             tmNow.tm_year + 1900, tmNow.tm_mon + 1, tmNow.tm_mday);
+
     ScheduleNode *scheds = load_schedules_list();
     char lastDate[20] = "";
     int count = 0;
     for (ScheduleNode *cur = scheds; cur; cur = cur->next) {
         if (strcmp(cur->data.doctor_id, docId) == 0 && strcmp(cur->data.status, "正常") == 0) {
-            /* 简单的去重，因为一个日期可能有多个时段 */
+            /* 过滤已过的日期，不显示比今天早的排班 */
+            if (strcmp(cur->data.work_date, todayStr) < 0) continue;
             if (strcmp(cur->data.work_date, lastDate) != 0) {
                 SendMessageA(hDate, CB_ADDSTRING, 0, (LPARAM)cur->data.work_date);
                 strcpy(lastDate, cur->data.work_date);
