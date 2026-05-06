@@ -1339,9 +1339,30 @@ static LRESULT CALLBACK PatientPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, L
                 PrescriptionNode *list = load_prescriptions_list();
                 for (PrescriptionNode *cur = list; cur; cur = cur->next) {
                     if (strcmp(cur->data.prescription_id, targetId) == 0) {
-                        float finalPrice = useInsurance ? cur->data.total_price * 0.3f : cur->data.total_price;
-                        char msg[128];
-                        snprintf(msg, sizeof(msg), "应付金额: %.2f 元%s\n确认支付?", finalPrice, useInsurance ? " (医保已报销70%)" : "");
+                        float finalPrice = cur->data.total_price;
+                        float reimbAmount = 0.0f;
+                        char reimbInfo[64] = "";
+
+                        if (useInsurance) {
+                            Drug *drug = find_drug_by_id(cur->data.drug_id);
+                            Patient *patient = find_patient_by_id(cur->data.patient_id);
+                            if (drug && patient) {
+                                reimbAmount = calculate_drug_reimbursement(drug, cur->data.quantity, patient->patient_type);
+                                finalPrice = cur->data.total_price - reimbAmount;
+                                if (finalPrice < 0.0f) finalPrice = 0.0f;
+                                snprintf(reimbInfo, sizeof(reimbInfo),
+                                         " (医保报销: %.2f 元, 药品比例: %.0f%%)",
+                                         reimbAmount, drug->reimbursement_ratio * 100);
+                            } else {
+                                snprintf(reimbInfo, sizeof(reimbInfo), " (无法获取医保信息)");
+                            }
+                            free(drug);
+                            free(patient);
+                        }
+
+                        char msg[256];
+                        snprintf(msg, sizeof(msg), "应付金额: %.2f 元%s\n确认支付?",
+                                 finalPrice, reimbInfo);
                         if (MessageBoxA(hWnd, msg, "支付确认", MB_YESNO | MB_ICONQUESTION) == IDYES) {
                             cur->data.paid = 1;
                             save_prescriptions_list(list);
@@ -1901,7 +1922,7 @@ static HWND CreatePaymentPage(HWND hParent, RECT *rc) {
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         w - 105, h - 40, 100, 30, hPage, (HMENU)4002, g_hInst, NULL);
 
-    CreateWindowA("BUTTON", "使用医保报销 (70%)",
+    CreateWindowA("BUTTON", "使用医保报销（按药品比例）",
         WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
         5, h - 40, 180, 20, hPage, (HMENU)4003, g_hInst, NULL);
 
