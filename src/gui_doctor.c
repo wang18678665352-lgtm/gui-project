@@ -521,6 +521,8 @@ static LRESULT CALLBACK ReminderPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
                 return 0;
             }
             strcpy(g_pendingApptId, selId);
+            g_consultPatientId[0] = 0;
+            g_consultRecordId[0] = 0;
             SwitchView(GetParent(hWnd), NAV_DOCTOR_CONSULTATION);
         }
         return 0;
@@ -1217,6 +1219,16 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
         }
         CreateWindowA("STATIC", hint, WS_VISIBLE | WS_CHILD | SS_LEFT,
                       10, y + 35, w, 20, hPage, NULL, g_hInst, NULL);
+    } else if (g_consultPatientId[0]) {
+        Patient *patient = find_patient_by_id(g_consultPatientId);
+        const char *pName = patient ? patient->name : g_consultPatientId;
+        char hint[MAX_BUFFER];
+        snprintf(hint, sizeof(hint),
+                 "  - 当前接诊患者: %s [%s] — 可进行开药/安排病房/其他医疗服务",
+                 pName, g_consultPatientId);
+        CreateWindowA("STATIC", hint, WS_VISIBLE | WS_CHILD | SS_LEFT,
+                      10, y + 35, w, 20, hPage, NULL, g_hInst, NULL);
+        if (patient) free(patient);
     }
 
     return hPage;
