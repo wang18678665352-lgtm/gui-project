@@ -1083,14 +1083,16 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         230, y, 140, 30, hPage, (HMENU)3204, g_hInst, NULL);
 
-    /* Show a hint if there is a pending onsite ID from reminder page */
-    if (g_pendingApptId[0] && strncmp(g_pendingApptId, "OS", 2) == 0) {
+    /* Show a hint if there is a pending ID from reminder page */
+    if (g_pendingApptId[0]) {
         char hint[100];
-        snprintf(hint, sizeof(hint), "  - 当前选中: %s (现场患者)", g_pendingApptId);
+        if (strncmp(g_pendingApptId, "OS", 2) == 0) {
+            snprintf(hint, sizeof(hint), "  - 当前选中: %s (现场患者)", g_pendingApptId);
+        } else {
+            snprintf(hint, sizeof(hint), "  - 当前选中: %s (预约患者)", g_pendingApptId);
+        }
         CreateWindowA("STATIC", hint, WS_VISIBLE | WS_CHILD | SS_LEFT,
                       10, y + 35, w, 20, hPage, NULL, g_hInst, NULL);
-    } else {
-        g_pendingApptId[0] = 0;
     }
 
     return hPage;
