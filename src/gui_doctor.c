@@ -597,6 +597,11 @@ static HWND CreateReminderPage(HWND hParent, RECT *rc) {
     AddCol(hLV, 5, "状态", 60);
     AddCol(hLV, 6, "急诊", 40);
 
+    time_t now = time(NULL);
+    struct tm *tmNow = localtime(&now);
+    char today[16];
+    strftime(today, sizeof(today), "%Y-%m-%d", tmNow);
+
     int aptRow = 0, onsRow = 0, totalRow = 0;
 
     /* 先添加预约患者 / Appointments first */
@@ -605,7 +610,8 @@ static HWND CreateReminderPage(HWND hParent, RECT *rc) {
         AppointmentNode *cur = apps;
         while (cur) {
             if (strcmp(cur->data.doctor_id, did) == 0 &&
-                strcmp(cur->data.status, "待就诊") == 0) {
+                strcmp(cur->data.status, "待就诊") == 0 &&
+                strncmp(cur->data.appointment_date, today, 10) == 0) {
                 char dateSlot[128];
                 snprintf(dateSlot, sizeof(dateSlot), "%s %s",
                          cur->data.appointment_date, cur->data.appointment_time);
@@ -999,6 +1005,10 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
     AddCol(hLV, 4, "状态", 80);
 
     int row = 0, preSelectRow = -1;
+    time_t now2 = time(NULL);
+    struct tm *tmNow2 = localtime(&now2);
+    char today2[16];
+    strftime(today2, sizeof(today2), "%Y-%m-%d", tmNow2);
 
     /* 先添加预约患者 / Appointments first */
     AppointmentNode *apps = load_appointments_list();
@@ -1007,7 +1017,8 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
         AppointmentNode *cur = apps;
         while (cur) {
             if (strcmp(cur->data.doctor_id, did) == 0 &&
-                strcmp(cur->data.status, "待就诊") == 0) {
+                strcmp(cur->data.status, "待就诊") == 0 &&
+                strncmp(cur->data.appointment_date, today2, 10) == 0) {
                 char dateSlot[128];
                 snprintf(dateSlot, sizeof(dateSlot), "%s %s",
                          cur->data.appointment_date, cur->data.appointment_time);
