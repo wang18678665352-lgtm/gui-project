@@ -1181,6 +1181,7 @@ WardNode* load_wards_list(void) {
         ward.total_beds = parse_int_token(&cursor);
         ward.remain_beds = parse_int_token(&cursor);
         ward.warning_line = parse_int_token(&cursor);
+        ward.price_per_day = parse_float_token(&cursor);
 
         WardNode *node = create_ward_node(&ward);
         if (!node) {
@@ -1208,15 +1209,16 @@ int save_wards_list(WardNode *head) {
         return ERROR_FILE_IO;
     }
 
-    fprintf(fp, "# ward_id\ttype\ttotal_beds\tremain_beds\twarning_line\n");
+    fprintf(fp, "# ward_id\ttype\ttotal_beds\tremain_beds\twarning_line\tprice_per_day\n");
     WardNode *current = head;
     while (current) {
         fprintf_escaped(fp, current->data.ward_id); fprintf(fp, "\t");
         fprintf_escaped(fp, current->data.type); fprintf(fp, "\t");
-        fprintf(fp, "%d\t%d\t%d\n",
+        fprintf(fp, "%d\t%d\t%d\t%.2f\n",
                 current->data.total_beds,
                 current->data.remain_beds,
-                current->data.warning_line);
+                current->data.warning_line,
+                current->data.price_per_day);
         current = current->next;
     }
 
@@ -1335,6 +1337,8 @@ OnsiteRegistrationQueue load_onsite_registration_queue(void) {
         registration.queue_number = parse_int_token(&cursor);
         { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(registration.status, tk, sizeof(registration.status) - 1); }
         { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(registration.create_time, tk, sizeof(registration.create_time) - 1); }
+        registration.fee = parse_float_token(&cursor);
+        registration.paid = parse_int_token(&cursor);
 
         /* 按文件顺序追加入队（队尾） / Enqueue in file order (rear append) */
         if (enqueue_onsite_registration(&queue, &registration, false) != SUCCESS) {
@@ -1355,7 +1359,7 @@ int save_onsite_registration_queue(const OnsiteRegistrationQueue *queue) {
         return ERROR_FILE_IO;
     }
 
-    fprintf(fp, "# onsite_id\tpatient_id\tdoctor_id\tdepartment_id\tqueue_number\tstatus\tcreate_time\n");
+    fprintf(fp, "# onsite_id\tpatient_id\tdoctor_id\tdepartment_id\tqueue_number\tstatus\tcreate_time\tfee\tpaid\n");
     /* 从队首开始遍历，保持队列顺序 / Traverse from front to preserve queue order */
     current = queue ? queue->front : NULL;
     while (current) {
@@ -1365,7 +1369,8 @@ int save_onsite_registration_queue(const OnsiteRegistrationQueue *queue) {
         fprintf_escaped(fp, current->data.department_id); fprintf(fp, "\t");
         fprintf(fp, "%d\t", current->data.queue_number);
         fprintf_escaped(fp, current->data.status); fprintf(fp, "\t");
-        fprintf_escaped(fp, current->data.create_time); fprintf(fp, "\n");
+        fprintf_escaped(fp, current->data.create_time); fprintf(fp, "\t");
+        fprintf(fp, "%.2f\t%d\n", current->data.fee, current->data.paid);
         current = current->next;
     }
 
@@ -1692,6 +1697,7 @@ PrescriptionNode* load_prescriptions_list(void) {
         prescription.quantity = parse_int_token(&cursor);
         prescription.total_price = parse_float_token(&cursor);
         { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(prescription.prescription_date, tk, sizeof(prescription.prescription_date) - 1); }
+        prescription.paid = parse_int_token(&cursor);
 
         PrescriptionNode *node = create_prescription_node(&prescription);
         if (!node) {
@@ -1719,7 +1725,7 @@ int save_prescriptions_list(PrescriptionNode *head) {
         return ERROR_FILE_IO;
     }
 
-    fprintf(fp, "# prescription_id\trecord_id\tpatient_id\tdoctor_id\tdrug_id\tquantity\ttotal_price\tprescription_date\n");
+    fprintf(fp, "# prescription_id\trecord_id\tpatient_id\tdoctor_id\tdrug_id\tquantity\ttotal_price\tprescription_date\tpaid\n");
     PrescriptionNode *current = head;
     while (current) {
         fprintf_escaped(fp, current->data.prescription_id); fprintf(fp, "\t");
@@ -1728,7 +1734,8 @@ int save_prescriptions_list(PrescriptionNode *head) {
         fprintf_escaped(fp, current->data.doctor_id); fprintf(fp, "\t");
         fprintf_escaped(fp, current->data.drug_id); fprintf(fp, "\t");
         fprintf(fp, "%d\t%.2f\t", current->data.quantity, current->data.total_price);
-        fprintf_escaped(fp, current->data.prescription_date); fprintf(fp, "\n");
+        fprintf_escaped(fp, current->data.prescription_date); fprintf(fp, "\t");
+        fprintf(fp, "%d\n", current->data.paid);
         current = current->next;
     }
 
@@ -2469,6 +2476,48 @@ Drug* find_drug_by_id(const char *drug_id) {
 }
 
 /*
+ * [中文] 根据科室ID查找科室
+ * [English] Find department by department ID (returns malloc'd copy)
+ */
+Department* find_department_by_id(const char *department_id) {
+    DepartmentNode *head = load_departments_list();
+    if (!head) return NULL;
+    DepartmentNode *current = head;
+    while (current) {
+        if (strcmp(current->data.department_id, department_id) == 0) {
+            Department *dept = (Department *)malloc(sizeof(Department));
+            if (dept) *dept = current->data;
+            free_department_list(head);
+            return dept;
+        }
+        current = current->next;
+    }
+    free_department_list(head);
+    return NULL;
+}
+
+/*
+ * [中文] 根据病房ID查找病房
+ * [English] Find ward by ward ID (returns malloc'd copy)
+ */
+Ward* find_ward_by_id(const char *ward_id) {
+    WardNode *head = load_wards_list();
+    if (!head) return NULL;
+    WardNode *current = head;
+    while (current) {
+        if (strcmp(current->data.ward_id, ward_id) == 0) {
+            Ward *ward = (Ward *)malloc(sizeof(Ward));
+            if (ward) *ward = current->data;
+            free_ward_list(head);
+            return ward;
+        }
+        current = current->next;
+    }
+    free_ward_list(head);
+    return NULL;
+}
+
+/*
  * [中文] 根据患者ID查找预约（返回第一个匹配项）
  * [English] Find appointment by patient ID (returns first match)
  */
@@ -2878,7 +2927,7 @@ static void remove_oldest_backup(void) {
             _findclose(fh);
         }
         _rmdir(path);  /* 删除空目录 / Remove the empty directory */
-        printf("  ⚠ 已清理最旧备份: %s (超过 %d 个限制)\n", oldest, MAX_BACKUPS);
+        printf("  [!] 已清理最旧备份: %s (超过 %d 个限制)\n", oldest, MAX_BACKUPS);
     }
 }
 #else

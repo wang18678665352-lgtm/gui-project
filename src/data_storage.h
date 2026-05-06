@@ -107,6 +107,7 @@ typedef struct {
     int total_beds;                 /* 总床位数 / total beds */
     int remain_beds;                /* 剩余可用床位 / remaining available beds */
     int warning_line;               /* 床位警戒线 (<= 此值触发告警) */
+    float price_per_day;            /* 每日价格 (元) / Price per day */
 } Ward;
 
 /* 预约挂号 — 持久化到 appointments.txt
@@ -134,6 +135,8 @@ typedef struct {
     int queue_number;               /* 排队号码 (按医生+科室递增) */
     char status[20];                /* 状态: 排队中/已接诊/已取消 */
     char create_time[30];           /* 创建时间戳 */
+    float fee;                      /* 挂号费 (元) */
+    int paid;                       /* 是否已缴费 (0=未缴, 1=已缴) */
 } OnsiteRegistration;
 
 /* 病房呼叫 — 持久化到 ward_calls.txt
@@ -171,6 +174,7 @@ typedef struct {
     int quantity;                   /* 数量 / quantity */
     float total_price;              /* 总价 (单价×数量) / total price */
     char prescription_date[20];     /* 处方日期 (YYYY-MM-DD) */
+    int paid;                       /* 是否已缴费 (0=未缴, 1=已缴) / Paid status */
 } Prescription;
 
 /* 诊断模板 — 持久化到 templates.txt
@@ -401,6 +405,7 @@ void update_doctor_id_across_files(const char *old_id, const char *new_id);
 
 DepartmentNode* load_departments_list(void);
 int save_departments_list(DepartmentNode *head);
+Department* find_department_by_id(const char *department_id);  /* 按科室 ID 查找 */
 
 DrugNode* load_drugs_list(void);
 int save_drugs_list(DrugNode *head);
@@ -408,6 +413,7 @@ Drug* find_drug_by_id(const char *drug_id);                /* 按药品 ID 查�
 
 WardNode* load_wards_list(void);
 int save_wards_list(WardNode *head);
+Ward* find_ward_by_id(const char *ward_id);                    /* 按病房 ID 查找 */
 
 AppointmentNode* load_appointments_list(void);
 int save_appointments_list(AppointmentNode *head);

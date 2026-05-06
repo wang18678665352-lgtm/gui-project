@@ -250,15 +250,23 @@ static void PopulateDeptList(HWND hLV) {
 static void PopulateDocList(HWND hLV) {
     ClearLV(hLV);
     DoctorNode *list = load_doctors_list();
+    DepartmentNode *depts = load_departments_list();
     int row = 0;
     for (DoctorNode *cur = list; cur; cur = cur->next) {
         char busy[16];
         snprintf(busy, sizeof(busy), "%d", cur->data.busy_level);
+        const char *deptName = cur->data.department_id;
+        for (DepartmentNode *dn = depts; dn; dn = dn->next) {
+            if (strcmp(dn->data.department_id, cur->data.department_id) == 0) {
+                deptName = dn->data.name; break;
+            }
+        }
         const char *items[5] = { cur->data.doctor_id, cur->data.name,
-                                 cur->data.department_id, cur->data.title, busy };
+                                 deptName, cur->data.title, busy };
         AddRow(hLV, row++, 5, items);
     }
     free_doctor_list(list);
+    free_department_list(depts);
 }
 
 static void PopulatePatList(HWND hLV) {
@@ -316,13 +324,21 @@ static void PopulateWardList(HWND hLV) {
 static void PopulateSchedList(HWND hLV) {
     ClearLV(hLV);
     ScheduleNode *list = load_schedules_list();
+    DoctorNode *docs = load_doctors_list();
     int row = 0;
     for (ScheduleNode *cur = list; cur; cur = cur->next) {
-        const char *items[5] = { cur->data.schedule_id, cur->data.doctor_id,
+        const char *docName = cur->data.doctor_id;
+        for (DoctorNode *dn = docs; dn; dn = dn->next) {
+            if (strcmp(dn->data.doctor_id, cur->data.doctor_id) == 0) {
+                docName = dn->data.name; break;
+            }
+        }
+        const char *items[5] = { cur->data.schedule_id, docName,
             cur->data.work_date, cur->data.time_slot, cur->data.status };
         AddRow(hLV, row++, 5, items);
     }
     free_schedule_list(list);
+    free_doctor_list(docs);
 }
 
 /* ─── 读取选中行到 FieldDef / Get Selected Row into FieldDef Array ─── */
@@ -1602,6 +1618,7 @@ static void PopulateAnalysisDoctorLoad(HWND hLV) {
     ClearLV(hLV);
 
     DoctorNode *docs = load_doctors_list();
+    DepartmentNode *depts = load_departments_list();
     AppointmentNode *appts = load_appointments_list();
     PrescriptionNode *prescs = load_prescriptions_list();
     MedicalRecordNode *records = load_medical_records_list();
@@ -1627,14 +1644,21 @@ static void PopulateAnalysisDoctorLoad(HWND hLV) {
         else if (recCount >= 10) strcpy(status, "正常");
         else strcpy(status, "较轻松");
 
+        const char *deptName = cur->data.department_id;
+        for (DepartmentNode *dn = depts; dn; dn = dn->next) {
+            if (strcmp(dn->data.department_id, cur->data.department_id) == 0) {
+                deptName = dn->data.name; break;
+            }
+        }
         const char *items[6] = {
             cur->data.doctor_id, cur->data.name,
-            cur->data.department_id, apptStr, prescStr, status
+            deptName, apptStr, prescStr, status
         };
         AddRow(hLV, row++, 6, items);
     }
 
     free_doctor_list(docs);
+    free_department_list(depts);
     free_appointment_list(appts);
     free_prescription_list(prescs);
     free_medical_record_list(records);

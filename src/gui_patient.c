@@ -1702,6 +1702,7 @@ static HWND CreateAppointmentPage(HWND hParent, RECT *rc) {
     AddCol(hAptLV, 4, "状态", 60);
 
     DoctorNode *docList = load_doctors_list();
+    DepartmentNode *aptDepts = load_departments_list();
     int aptRow = 0;
     AppointmentNode *apps = load_appointments_list();
     if (apps && strlen(pid) > 0) {
@@ -1770,9 +1771,18 @@ static HWND CreateAppointmentPage(HWND hParent, RECT *rc) {
                         docName2 = dn->data.name; break;
                     }
                 }
+                const char *deptName2 = on->data.department_id;
+                if (aptDepts) {
+                    DepartmentNode *dn = aptDepts;
+                    while (dn) {
+                        if (strcmp(dn->data.department_id, on->data.department_id) == 0)
+                        { deptName2 = dn->data.name; break; }
+                        dn = dn->next;
+                    }
+                }
                 const char *items[6] = {
                     on->data.onsite_id, docName2,
-                    on->data.department_id, qn, on->data.status,
+                    deptName2, qn, on->data.status,
                     aheadStr
                 };
                 AddRow(hOnsLV, onsRow++, 6, items);
@@ -1782,6 +1792,7 @@ static HWND CreateAppointmentPage(HWND hParent, RECT *rc) {
         free_onsite_registration_queue(&onQ);
     }
     free_doctor_list(docList);
+    if (aptDepts) free_department_list(aptDepts);
     ShowWindow(hOnsLV, SW_HIDE);
 
     /* Action buttons */
@@ -1821,14 +1832,24 @@ static HWND CreateDiagnosisPage(HWND hParent, RECT *rc) {
 
     const char *pid = GetPatientId();
     MedicalRecordNode *recs = load_medical_records_list();
+    DoctorNode *diagDocs = load_doctors_list();
     int row = 0;
     if (recs && strlen(pid) > 0) {
         MedicalRecordNode *cur = recs;
         while (cur) {
             if (strcmp(cur->data.patient_id, pid) == 0) {
+                const char *docName = cur->data.doctor_id;
+                if (diagDocs) {
+                    DoctorNode *dn = diagDocs;
+                    while (dn) {
+                        if (strcmp(dn->data.doctor_id, cur->data.doctor_id) == 0)
+                        { docName = dn->data.name; break; }
+                        dn = dn->next;
+                    }
+                }
                 const char *items[4] = {
                     cur->data.record_id,
-                    cur->data.doctor_id,
+                    docName,
                     cur->data.diagnosis_date,
                     cur->data.status
                 };
@@ -1838,6 +1859,7 @@ static HWND CreateDiagnosisPage(HWND hParent, RECT *rc) {
         }
     }
     free_medical_record_list(recs);
+    if (diagDocs) free_doctor_list(diagDocs);
 
     CreateWindowA("STATIC", "诊断:",
         WS_VISIBLE | WS_CHILD, 5, 165, 100, 20,
@@ -1871,15 +1893,28 @@ static void PopulatePaymentList(HWND hLV) {
 
     /* 1. 待缴费处方 / Unpaid Prescriptions */
     PrescriptionNode *rxList = load_prescriptions_list();
+    DrugNode *payDrugs = load_drugs_list();
     for (PrescriptionNode *cur = rxList; cur; cur = cur->next) {
         if (strcmp(cur->data.patient_id, pid) == 0 && !cur->data.paid) {
-            char price[20];
+            char price[20], drugType[80];
             snprintf(price, sizeof(price), "%.2f", cur->data.total_price);
-            const char *items[5] = { cur->data.prescription_id, "处方药", price, cur->data.prescription_date, "未缴费" };
+            snprintf(drugType, sizeof(drugType), "处方药");
+            if (payDrugs) {
+                DrugNode *dn = payDrugs;
+                while (dn) {
+                    if (strcmp(dn->data.drug_id, cur->data.drug_id) == 0) {
+                        snprintf(drugType, sizeof(drugType), "%s", dn->data.name);
+                        break;
+                    }
+                    dn = dn->next;
+                }
+            }
+            const char *items[5] = { cur->data.prescription_id, drugType, price, cur->data.prescription_date, "未缴费" };
             AddRow(hLV, row++, 5, items);
         }
     }
     free_prescription_list(rxList);
+    if (payDrugs) free_drug_list(payDrugs);
 
     /* 2. 待缴费挂号 (通常已缴，此处作为兜底) / Unpaid Registrations */
     AppointmentNode *appts = load_appointments_list();
@@ -2140,19 +2175,29 @@ static HWND CreateWardPage(HWND hParent, RECT *rc) {
 
     HWND hCallLV = CreateListView(hPage, IDC_WARD_CALL_LV, 5, 22, w - 10, halfH - 22);
     AddCol(hCallLV, 0, "呼叫ID", 130);
-    AddCol(hCallLV, 1, "病房ID", 80);
+    AddCol(hCallLV, 1, "病房", 100);
     AddCol(hCallLV, 2, "消息", 200);
     AddCol(hCallLV, 3, "状态", 60);
     AddCol(hCallLV, 4, "时间", 160);
 
     int callRow = 0;
     WardCallNode *calls = load_ward_calls_list();
+    WardNode *patWards = load_wards_list();
     if (calls && strlen(pid) > 0) {
         WardCallNode *cur = calls;
         while (cur) {
             if (strcmp(cur->data.patient_id, pid) == 0) {
+                const char *wardType = cur->data.ward_id;
+                if (patWards) {
+                    WardNode *w = patWards;
+                    while (w) {
+                        if (strcmp(w->data.ward_id, cur->data.ward_id) == 0)
+                        { wardType = w->data.type; break; }
+                        w = w->next;
+                    }
+                }
                 const char *items[5] = {
-                    cur->data.call_id, cur->data.ward_id,
+                    cur->data.call_id, wardType,
                     cur->data.message, cur->data.status,
                     cur->data.create_time
                 };
@@ -2162,6 +2207,7 @@ static HWND CreateWardPage(HWND hParent, RECT *rc) {
         }
         free_ward_call_list(calls);
     }
+    if (patWards) free_ward_list(patWards);
 
     CreateWindowA("BUTTON", "发起呼叫",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
