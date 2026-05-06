@@ -257,9 +257,9 @@ static int count_slot_appointments(const char *doctor_id, const char *date,
                 strcmp(cur->data.appointment_date, date) == 0 &&
                 strcmp(cur->data.appointment_time, timeSlot) == 0 &&
                 strcmp(cur->data.status, "已就诊") != 0 &&
+                strcmp(cur->data.status, "已完成") != 0 &&
                 strcmp(cur->data.status, "已取消") != 0 &&
                 strcmp(cur->data.status, "已爽约") != 0) {
-                /* 过去日期的待就诊自动标记为已爽约 */
                 if (strcmp(date, todayStr) < 0 &&
                     strcmp(cur->data.status, "待就诊") == 0) {
                     strcpy(cur->data.status, "已爽约");
@@ -394,6 +394,7 @@ static int has_registration_conflict_gui(const char *patient_id, const char *doc
             strcmp(cur->data.doctor_id, doctor_id) == 0 &&
             strcmp(cur->data.department_id, department_id) == 0 &&
             strcmp(cur->data.status, "已就诊") != 0 &&
+            strcmp(cur->data.status, "已完成") != 0 &&
             strcmp(cur->data.status, "已取消") != 0 &&
             strcmp(cur->data.status, "已爽约") != 0) {
             free_appointment_list(apps);
@@ -1377,9 +1378,33 @@ static LRESULT CALLBACK PatientPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, L
                 AppointmentNode *list = load_appointments_list();
                 for (AppointmentNode *cur = list; cur; cur = cur->next) {
                     if (strcmp(cur->data.appointment_id, targetId) == 0) {
-                        cur->data.paid = 1;
-                        save_appointments_list(list);
-                        MessageBoxA(hWnd, "支付成功", "成功", MB_OK);
+                        float finalPrice = cur->data.fee;
+                        float reimbAmount = 0.0f;
+                        char reimbInfo[64] = "";
+
+                        if (useInsurance) {
+                            Patient *patient = find_patient_by_id(cur->data.patient_id);
+                            if (patient) {
+                                reimbAmount = calculate_reimbursement(cur->data.fee, patient->patient_type);
+                                finalPrice = cur->data.fee - reimbAmount;
+                                if (finalPrice < 0.0f) finalPrice = 0.0f;
+                                snprintf(reimbInfo, sizeof(reimbInfo),
+                                         " (医保报销: %.2f 元)", reimbAmount);
+                                free(patient);
+                            } else {
+                                snprintf(reimbInfo, sizeof(reimbInfo), " (无法获取医保信息)");
+                            }
+                        }
+
+                        char msg[256];
+                        snprintf(msg, sizeof(msg), "应付金额: %.2f 元%s\n确认支付?",
+                                 finalPrice, reimbInfo);
+                        if (MessageBoxA(hWnd, msg, "支付确认", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                            cur->data.paid = 1;
+                            save_appointments_list(list);
+                            append_log(g_currentUser.username, "缴纳挂号费", "appointment", targetId, useInsurance ? "医保" : "自费");
+                            MessageBoxA(hWnd, "支付成功", "成功", MB_OK);
+                        }
                         break;
                     }
                 }
