@@ -1528,24 +1528,20 @@ static LRESULT CALLBACK PatientPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, L
 
             char ageStr[16];
             snprintf(ageStr, sizeof(ageStr), "%d", p->age);
-            PatFieldDef f[7] = {
+            PatFieldDef f[6] = {
                 {"姓名", "", MAX_NAME, FALSE},
                 {"性别", "", 10, FALSE},
                 {"年龄", "", 16, FALSE},
                 {"电话", "", 20, FALSE},
                 {"地址", "", 200, FALSE},
-                {"患者类型", "", 20, TRUE},
-                {"治疗阶段", "", 20, TRUE},
             };
             strcpy(f[0].value, p->name);
             strcpy(f[1].value, p->gender);
             strcpy(f[2].value, ageStr);
             strcpy(f[3].value, p->phone);
             strcpy(f[4].value, p->address);
-            strcpy(f[5].value, p->patient_type);
-            strcpy(f[6].value, p->treatment_stage);
 
-            if (ShowPatFieldDialog(hWnd, "编辑个人信息", f, 7)) {
+            if (ShowPatFieldDialog(hWnd, "编辑个人信息", f, 5)) {
                 PatientNode *head = load_patients_list();
                 for (PatientNode *cur = head; cur; cur = cur->next) {
                     if (strcmp(cur->data.patient_id, pid) == 0) {
