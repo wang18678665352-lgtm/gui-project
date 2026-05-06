@@ -1971,7 +1971,7 @@ static HWND CreatePaymentPage(HWND hParent, RECT *rc) {
 #define IDC_WARD_CALL_LV     2102
 #define IDC_WARD_INFO_LV     2103
 
-/* 病房呼叫对话框 / Ward Call Dialog */
+/* 呼叫护士对话框 / Nurse Call Dialog */
 static int g_wardCallResult = 0;
 
 static LRESULT CALLBACK WardCallDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1979,23 +1979,7 @@ static LRESULT CALLBACK WardCallDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
     case WM_CREATE: {
         int y = 15;
 
-        CreateWindowA("STATIC", "选择病房:",
-            WS_VISIBLE | WS_CHILD | SS_LEFT,
-            20, y + 2, 80, 20, hDlg, NULL, g_hInst, NULL);
-        HWND hWard = CreateWindowA("COMBOBOX", "",
-            WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL | CBS_HASSTRINGS,
-            110, y, 250, 200, hDlg, (HMENU)101, g_hInst, NULL);
-        WardNode *wards = load_wards_list();
-        for (WardNode *w = wards; w; w = w->next) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "%s - %s (余%d床)", w->data.ward_id, w->data.type, w->data.remain_beds);
-            SendMessageA(hWard, CB_ADDSTRING, 0, (LPARAM)buf);
-        }
-        free_ward_list(wards);
-        SendMessage(hWard, CB_SETCURSEL, 0, 0);
-        y += 35;
-
-        CreateWindowA("STATIC", "呼叫消息:",
+        CreateWindowA("STATIC", "呼叫原因:",
             WS_VISIBLE | WS_CHILD | SS_LEFT,
             20, y + 2, 80, 20, hDlg, NULL, g_hInst, NULL);
         CreateWindowA("EDIT", "",
@@ -2003,7 +1987,12 @@ static LRESULT CALLBACK WardCallDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
             110, y, 250, 60, hDlg, (HMENU)102, g_hInst, NULL);
         y += 75;
 
-        CreateWindowA("BUTTON", "发起呼叫", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        CreateWindowA("STATIC", "请输入呼叫原因，护士将尽快响应。",
+            WS_VISIBLE | WS_CHILD | SS_LEFT,
+            20, y, 300, 20, hDlg, NULL, g_hInst, NULL);
+        y += 30;
+
+        CreateWindowA("BUTTON", "呼叫护士", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
             80, y, 100, 30, hDlg, (HMENU)IDOK, g_hInst, NULL);
         CreateWindowA("BUTTON", "取消", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
             200, y, 100, 30, hDlg, (HMENU)IDCANCEL, g_hInst, NULL);
@@ -2011,29 +2000,30 @@ static LRESULT CALLBACK WardCallDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
     }
     case WM_COMMAND: {
         if (LOWORD(wParam) == IDOK) {
-            HWND hWard = GetDlgItem(hDlg, 101);
-            int sel = (int)SendMessageA(hWard, CB_GETCURSEL, 0, 0);
-            if (sel == CB_ERR) {
-                MessageBoxA(hDlg, "请选择病房", "提示", MB_OK);
-                return 0;
-            }
-            char wardLabel[128] = {0};
-            SendMessageA(hWard, CB_GETLBTEXT, (WPARAM)sel, (LPARAM)wardLabel);
-
-            char wardId[MAX_ID] = {0};
-            char *sep = strstr(wardLabel, " - ");
-            if (sep) {
-                size_t len = sep - wardLabel;
-                if (len >= sizeof(wardId)) len = sizeof(wardId) - 1;
-                memcpy(wardId, wardLabel, len);
-                wardId[len] = 0;
-            }
-
             char message[200] = {0};
             GetDlgItemTextA(hDlg, 102, message, sizeof(message));
 
-            /* 获取科室ID (从病房所在科室推断, 用第一个科室)
-               实际中病房关联科室, 这里简化为取第一个科室 */
+            if (message[0] == 0) {
+                MessageBoxA(hDlg, "请输入呼叫原因", "提示", MB_OK);
+                return 0;
+            }
+
+            /* 确定患者所在病房：从患者历史呼叫记录中查找最近一次使用的病房 */
+            char wardId[MAX_ID] = "";
+            WardCallNode *oldCalls = load_ward_calls_list();
+            if (oldCalls) {
+                WardCallNode *cur = oldCalls;
+                while (cur) {
+                    if (strcmp(cur->data.patient_id, GetPatientId()) == 0
+                        && cur->data.ward_id[0]) {
+                        strcpy(wardId, cur->data.ward_id);
+                        break;
+                    }
+                    cur = cur->next;
+                }
+                free_ward_call_list(oldCalls);
+            }
+
             char deptId[MAX_ID] = "";
             DepartmentNode *depts = load_departments_list();
             if (depts) {
@@ -2047,7 +2037,7 @@ static LRESULT CALLBACK WardCallDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
             strcpy(call.ward_id, wardId);
             strcpy(call.department_id, deptId);
             strcpy(call.patient_id, GetPatientId());
-            strcpy(call.message, message[0] ? message : "患者呼叫");
+            strcpy(call.message, message);
             strcpy(call.status, "待响应");
             get_current_time(call.create_time, sizeof(call.create_time));
 
@@ -2057,7 +2047,7 @@ static LRESULT CALLBACK WardCallDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
             save_ward_calls_list(node);
             free_ward_call_list(node);
 
-            append_log(g_currentUser.username, "发起呼叫", "ward_call", call.call_id, message);
+            append_log(g_currentUser.username, "呼叫护士", "ward_call", call.call_id, message);
             g_wardCallResult = 1;
             DestroyWindow(hDlg);
             return 0;
@@ -2087,7 +2077,7 @@ static int ShowWardCallDialog(HWND hParent) {
     wc.lpszClassName = "PatientWardCallDlg";
     RegisterClassA(&wc);
 
-    HWND hDlg = CreateWindowExA(0, "PatientWardCallDlg", "病房呼叫",
+    HWND hDlg = CreateWindowExA(0, "PatientWardCallDlg", "呼叫护士",
         WS_VISIBLE | WS_POPUPWINDOW | WS_CAPTION | WS_SYSMENU,
         CW_USEDEFAULT, CW_USEDEFAULT, 400, 220,
         hParent, NULL, g_hInst, NULL);
@@ -2137,7 +2127,7 @@ static LRESULT CALLBACK WardPatientPageWndProc(HWND hWnd, UINT msg, WPARAM wPara
     case WM_COMMAND: {
         if (LOWORD(wParam) == IDC_WARD_CALL_BTN) {
             if (ShowWardCallDialog(GetParent(hWnd))) {
-                MessageBoxA(GetParent(hWnd), "病房呼叫已发送", "成功", MB_OK | MB_ICONINFORMATION);
+                MessageBoxA(GetParent(hWnd), "呼叫已发送，护士将尽快响应", "成功", MB_OK | MB_ICONINFORMATION);
                 PostMessage(GetParent(hWnd), WM_APP_REFRESH, NAV_PATIENT_WARD, 0);
             }
         }
@@ -2168,8 +2158,8 @@ static HWND CreateWardPage(HWND hParent, RECT *rc) {
     if (halfH < 80) halfH = 80;
     const char *pid = GetPatientId();
 
-    /* ── 我的病房呼叫 / My Ward Calls ── */
-    CreateWindowA("STATIC", "我的病房呼叫:",
+    /* ── 我的呼叫记录 / My Call History ── */
+    CreateWindowA("STATIC", "我的呼叫记录:",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
         5, 5, 200, 20, hPage, NULL, g_hInst, NULL);
 
@@ -2209,7 +2199,7 @@ static HWND CreateWardPage(HWND hParent, RECT *rc) {
     }
     if (patWards) free_ward_list(patWards);
 
-    CreateWindowA("BUTTON", "发起呼叫",
+    CreateWindowA("BUTTON", "呼叫护士",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         w - 110, halfH + 8, 100, 30,
         hPage, (HMENU)IDC_WARD_CALL_BTN, g_hInst, NULL);
