@@ -18,7 +18,7 @@
 
 /* 创建患者端页面: 根据 viewId 返回对应的子窗口句柄
    viewId 取值: NAV_PATIENT_REGISTER / NAV_PATIENT_APPOINTMENT /
-   NAV_PATIENT_DIAGNOSIS / NAV_PATIENT_PRESCRIPTION / NAV_PATIENT_WARD /
+   NAV_PATIENT_DIAGNOSIS / NAV_PATIENT_PRESCRIPTION(缴费) / NAV_PATIENT_WARD /
    NAV_PATIENT_PROGRESS / NAV_PATIENT_PROFILE
    Create patient page: returns child window handle based on viewId */
 HWND CreatePatientPage(HWND hParent, int viewId, RECT *rc);

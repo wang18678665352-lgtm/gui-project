@@ -1432,6 +1432,8 @@ WardCallNode* load_ward_calls_list(void) {
         { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(call.message, tk, sizeof(call.message) - 1); }
         { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(call.status, tk, sizeof(call.status) - 1); }
         { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(call.create_time, tk, sizeof(call.create_time) - 1); }
+        { char *tk = next_token(&cursor); call.paid = tk ? atoi(tk) : 0; }
+        { char *tk = next_token(&cursor); call.fee = tk ? (float)atof(tk) : 0.0f; }
 
         WardCallNode *node = create_ward_call_node(&call);
         if (!node) {
@@ -1461,7 +1463,7 @@ int save_ward_calls_list(WardCallNode *head) {
         return ERROR_FILE_IO;
     }
 
-    fprintf(fp, "# call_id\tward_id\tdepartment_id\tpatient_id\tmessage\tstatus\tcreate_time\n");
+    fprintf(fp, "# call_id\tward_id\tdepartment_id\tpatient_id\tmessage\tstatus\tcreate_time\tpaid\tfee\n");
     while (current) {
         fprintf_escaped(fp, current->data.call_id); fprintf(fp, "\t");
         fprintf_escaped(fp, current->data.ward_id); fprintf(fp, "\t");
@@ -1469,7 +1471,8 @@ int save_ward_calls_list(WardCallNode *head) {
         fprintf_escaped(fp, current->data.patient_id); fprintf(fp, "\t");
         fprintf_escaped(fp, current->data.message); fprintf(fp, "\t");
         fprintf_escaped(fp, current->data.status); fprintf(fp, "\t");
-        fprintf_escaped(fp, current->data.create_time); fprintf(fp, "\n");
+        fprintf_escaped(fp, current->data.create_time); fprintf(fp, "\t");
+        fprintf(fp, "%d\t%.2f\n", current->data.paid, current->data.fee);
         current = current->next;
     }
 

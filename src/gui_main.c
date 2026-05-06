@@ -47,6 +47,7 @@ static int g_currentView = 0;          /* 当前视图 ID / current view ID */
 static time_t g_lastApptMtime   = 0;   /* appointments.txt */
 static time_t g_lastRecordMtime = 0;   /* medical_records.txt */
 static time_t g_lastRxMtime     = 0;   /* prescriptions.txt */
+static time_t g_lastWardCallMtime = 0; /* ward_calls.txt */
 static time_t g_lastWardMtime   = 0;   /* wards.txt */
 
 /* 前向声明 / Forward declarations */
@@ -166,6 +167,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (stat(APPOINTMENTS_FILE, &st) == 0)   g_lastApptMtime   = st.st_mtime;
         if (stat(MEDICAL_RECORDS_FILE, &st) == 0) g_lastRecordMtime = st.st_mtime;
         if (stat(PRESCRIPTIONS_FILE, &st) == 0)   g_lastRxMtime     = st.st_mtime;
+        if (stat(WARD_CALLS_FILE, &st) == 0)    g_lastWardCallMtime = st.st_mtime;
         if (stat(WARDS_FILE, &st) == 0)           g_lastWardMtime   = st.st_mtime;
     }
 
@@ -298,7 +300,7 @@ static void PopulateNavTree(void) {
             {"挂号",          NAV_PATIENT_REGISTER},
             {"预约查询",      NAV_PATIENT_APPOINTMENT},
             {"诊断结果",      NAV_PATIENT_DIAGNOSIS},
-            {"处方查询",      NAV_PATIENT_PRESCRIPTION},
+            {"缴费",          NAV_PATIENT_PRESCRIPTION},
             {"住院信息",      NAV_PATIENT_WARD},
             {"治疗进度",      NAV_PATIENT_PROGRESS},
             {"个人信息",      NAV_PATIENT_PROFILE},
@@ -607,6 +609,13 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             if (!dirty && stat(PRESCRIPTIONS_FILE, &st) == 0) {
                 if (st.st_mtime != g_lastRxMtime) {
                     g_lastRxMtime = st.st_mtime;
+                    if (g_currentView == NAV_PATIENT_PRESCRIPTION)
+                        dirty = 1;
+                }
+            }
+            if (!dirty && stat(WARD_CALLS_FILE, &st) == 0) {
+                if (st.st_mtime != g_lastWardCallMtime) {
+                    g_lastWardCallMtime = st.st_mtime;
                     if (g_currentView == NAV_PATIENT_PRESCRIPTION)
                         dirty = 1;
                 }

@@ -5,7 +5,7 @@
  *   - 预约挂号 (CreateRegisterPage) — 选择科室→医生→日期→时段, 校验排班后创建预约
  *   - 预约查询 (CreateAppointmentPage) — ListView 展示当前患者所有预约, 支持取消
  *   - 诊断结果 (CreateDiagnosisPage) — 查看病史记录列表, 选中查看诊断详情
- *   - 处方查询 (CreatePrescriptionPage) — 查看所有处方的药品/数量/金额
+ *   - 缴费 (CreatePaymentPage) — 支付处方/挂号/病房及其他医疗服务费用
  *   - 住院信息 (CreateWardPage) — 查看病房类型/总床位/剩余床位
  *   - 治疗进度 (CreateProgressPage) — 显示当前治疗阶段与紧急状态
  *   - 个人信息 (CreateProfilePage) — 查看与编辑个人资料 (姓名/性别/年龄/电话/地址)
@@ -1418,6 +1418,42 @@ static LRESULT CALLBACK PatientPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, L
                     }
                 }
                 free_appointment_list(list);
+            } else if (strncmp(targetId, "WC", 2) == 0) {
+                /* 病房服务缴费 / Ward service payment */
+                WardCallNode *list = load_ward_calls_list();
+                for (WardCallNode *cur = list; cur; cur = cur->next) {
+                    if (strcmp(cur->data.call_id, targetId) == 0) {
+                        float finalPrice = cur->data.fee;
+                        float reimbAmount = 0.0f;
+                        char reimbInfo[64] = "";
+
+                        if (useInsurance) {
+                            Patient *patient = find_patient_by_id(cur->data.patient_id);
+                            if (patient) {
+                                reimbAmount = calculate_reimbursement(cur->data.fee, patient->patient_type);
+                                finalPrice = cur->data.fee - reimbAmount;
+                                if (finalPrice < 0.0f) finalPrice = 0.0f;
+                                snprintf(reimbInfo, sizeof(reimbInfo),
+                                         " (医保报销: %.2f 元)", reimbAmount);
+                                free(patient);
+                            } else {
+                                snprintf(reimbInfo, sizeof(reimbInfo), " (无法获取医保信息)");
+                            }
+                        }
+
+                        char msg[256];
+                        snprintf(msg, sizeof(msg), "应付金额: %.2f 元%s\n确认支付?",
+                                 finalPrice, reimbInfo);
+                        if (MessageBoxA(hWnd, msg, "支付确认", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                            cur->data.paid = 1;
+                            save_ward_calls_list(list);
+                            append_log(g_currentUser.username, "缴纳病房费", "ward_call", targetId, useInsurance ? "医保" : "自费");
+                            MessageBoxA(hWnd, "支付成功", "成功", MB_OK);
+                        }
+                        break;
+                    }
+                }
+                free_ward_call_list(list);
             }
             PopulatePaymentList(hLV);
             return 0;
@@ -1913,6 +1949,8 @@ static HWND CreateDiagnosisPage(HWND hParent, RECT *rc) {
 }
 
 /* ─── 缴费页面 / Payment Page ────────────────────────── */
+/* 支持多种医疗服务: 处方/挂号/病房/其他, 按ID前缀自动识别
+   Service types: PR=处方药, APT/O_=挂号, WC=病房, 未来类型只需加前缀 */
 
 static void PopulatePaymentList(HWND hLV) {
     ListView_DeleteAllItems(hLV);
@@ -1946,7 +1984,7 @@ static void PopulatePaymentList(HWND hLV) {
     free_prescription_list(rxList);
     if (payDrugs) free_drug_list(payDrugs);
 
-    /* 2. 待缴费挂号 (通常已缴，此处作为兜底) / Unpaid Registrations */
+    /* 2. 待缴费挂号 / Unpaid Registrations */
     AppointmentNode *appts = load_appointments_list();
     for (AppointmentNode *cur = appts; cur; cur = cur->next) {
         if (strcmp(cur->data.patient_id, pid) == 0 && !cur->data.paid && cur->data.fee > 0) {
@@ -1957,6 +1995,34 @@ static void PopulatePaymentList(HWND hLV) {
         }
     }
     free_appointment_list(appts);
+
+    /* 3. 待缴费病房 / Unpaid Ward Services */
+    WardCallNode *wardCalls = load_ward_calls_list();
+    WardNode *wards = load_wards_list();
+    for (WardCallNode *cur = wardCalls; cur; cur = cur->next) {
+        if (strcmp(cur->data.patient_id, pid) == 0 && !cur->data.paid) {
+            /* 未设置费用时从病房日费读取 */
+            if (cur->data.fee <= 0.0f && wards) {
+                WardNode *wn = wards;
+                while (wn) {
+                    if (strcmp(wn->data.ward_id, cur->data.ward_id) == 0) {
+                        cur->data.fee = wn->data.price_per_day;
+                        break;
+                    }
+                    wn = wn->next;
+                }
+            }
+            if (cur->data.fee <= 0.0f) continue; /* 无法确定费用则跳过 */
+            char price[20];
+            snprintf(price, sizeof(price), "%.2f", cur->data.fee);
+            char type[80];
+            snprintf(type, sizeof(type), "病房服务");
+            const char *items[5] = { cur->data.call_id, type, price, cur->data.create_time, "未缴费" };
+            AddRow(hLV, row++, 5, items);
+        }
+    }
+    free_ward_call_list(wardCalls);
+    if (wards) free_ward_list(wards);
 }
 
 static HWND CreatePaymentPage(HWND hParent, RECT *rc) {
@@ -2070,6 +2136,22 @@ static LRESULT CALLBACK WardCallDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
             strcpy(call.message, message);
             strcpy(call.status, "待响应");
             get_current_time(call.create_time, sizeof(call.create_time));
+            call.paid = 0;
+            /* 从病房信息中获取日费用 */
+            {
+                WardNode *wards = load_wards_list();
+                if (wards) {
+                    WardNode *wn = wards;
+                    while (wn) {
+                        if (wardId[0] && strcmp(wn->data.ward_id, wardId) == 0) {
+                            call.fee = wn->data.price_per_day;
+                            break;
+                        }
+                        wn = wn->next;
+                    }
+                    free_ward_list(wards);
+                }
+            }
 
             WardCallNode *calls = load_ward_calls_list();
             WardCallNode *node = create_ward_call_node(&call);

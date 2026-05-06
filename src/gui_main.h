@@ -57,7 +57,7 @@ enum {
     NAV_PATIENT_REGISTER = NAV_PATIENT_BASE + 1,    /* 预约挂号 / book appointment */
     NAV_PATIENT_APPOINTMENT,                         /* 挂号记录 / appointment records */
     NAV_PATIENT_DIAGNOSIS,                           /* 诊断记录 / diagnosis records */
-    NAV_PATIENT_PRESCRIPTION,                        /* 处方记录 / prescription records */
+    NAV_PATIENT_PRESCRIPTION,                        /* 缴费 / payment */
     NAV_PATIENT_WARD,                                /* 病房信息 / ward info */
     NAV_PATIENT_PROGRESS,                            /* 治疗进度 / treatment progress */
     NAV_PATIENT_PROFILE,                             /* 个人资料 / profile */

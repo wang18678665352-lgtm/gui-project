@@ -149,6 +149,8 @@ typedef struct {
     char message[200];              /* 呼叫消息 / call message */
     char status[20];                /* 状态: 待响应/已响应/已处理 */
     char create_time[30];           /* 创建时间戳 */
+    int paid;                       /* 是否已缴费 (0=未缴, 1=已缴) */
+    float fee;                      /* 费用 */
 } WardCall;
 
 /* 病历 — 持久化到 medical_records.txt
