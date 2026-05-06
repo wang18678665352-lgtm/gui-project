@@ -1384,33 +1384,53 @@ static LRESULT CALLBACK PatientPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, L
                 }
                 free_prescription_list(list);
             } else if (strncmp(targetId, "APT", 3) == 0) {
+                /* ─── 挂号缴费（支持医保报销） / Appointment Payment (insurance supported) ─── */
                 AppointmentNode *list = load_appointments_list();
                 for (AppointmentNode *cur = list; cur; cur = cur->next) {
                     if (strcmp(cur->data.appointment_id, targetId) == 0) {
+                        /* 实付金额初始为挂号费原价 / final price starts at original fee */
                         float finalPrice = cur->data.fee;
                         float reimbAmount = 0.0f;
                         char reimbInfo[64] = "";
 
+                        /* 勾选"使用医保报销"时，按患者类型计算报销金额
+                           When insurance checkbox is checked, calculate reimbursement by patient type:
+                             - 医保患者报销 60% / insured patients get 60% reimbursement
+                             - 军人患者报销 80% / military patients get 80% reimbursement
+                             - 普通/自费患者不报销 / ordinary/self-pay patients get 0% */
                         if (useInsurance) {
+                            /* 通过预约记录中的 patient_id 查找患者档案，获取患者类型
+                               Look up patient profile by patient_id from appointment to get patient_type */
                             Patient *patient = find_patient_by_id(cur->data.patient_id);
                             if (patient) {
+                                /* 计算报销金额 (基于挂号费原价 × 患者类型报销比率)
+                                   Calculate reimbursement amount based on original fee × patient type ratio */
                                 reimbAmount = calculate_reimbursement(cur->data.fee, patient->patient_type);
+                                /* 实付金额 = 原价 − 报销金额 (不低于 0)
+                                   Final price = original fee − reimbursement (floor at 0) */
                                 finalPrice = cur->data.fee - reimbAmount;
                                 if (finalPrice < 0.0f) finalPrice = 0.0f;
+                                /* 拼接报销提示信息 / build reimbursement info string */
                                 snprintf(reimbInfo, sizeof(reimbInfo),
                                          " (医保报销: %.2f 元)", reimbAmount);
                                 free(patient);
                             } else {
+                                /* 找不到患者档案时的兜底提示 / fallback when patient record not found */
                                 snprintf(reimbInfo, sizeof(reimbInfo), " (无法获取医保信息)");
                             }
                         }
 
+                        /* 弹出确认对话框，展示实付金额和报销明细，用户确认后才扣款
+                           Show confirmation dialog with final price and reimbursement breakdown */
                         char msg[256];
                         snprintf(msg, sizeof(msg), "应付金额: %.2f 元%s\n确认支付?",
                                  finalPrice, reimbInfo);
                         if (MessageBoxA(hWnd, msg, "支付确认", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                            /* 标记为已缴费并保存 / Mark as paid and persist */
                             cur->data.paid = 1;
                             save_appointments_list(list);
+                            /* 记录操作日志 (操作类型: 缴纳挂号费, 支付方式: 医保/自费)
+                               Log the payment action with payment method (insurance/self-pay) */
                             append_log(g_currentUser.username, "缴纳挂号费", "appointment", targetId, useInsurance ? "医保" : "自费");
                             MessageBoxA(hWnd, "支付成功", "成功", MB_OK);
                         }
