@@ -1,6 +1,6 @@
 /*
  * gui_doctor.c — Win32 GUI 医生界面实现 / Win32 GUI doctor page implementation
- *
+ *作者：王福源
  * 实现医生角色的所有 GUI 页面 (8 个页面 + 开药对话框):
  *   - 待接诊 (CreateReminderPage) — 显示当前医生所有"待就诊"预约, 选中后跳转接诊
  *   - 接诊 (CreateConsultationPage) — 选择患者→填写诊断→完成诊断→开药/开病房/其他医疗服务
@@ -92,6 +92,24 @@ static void GetSelectedItemText(HWND hLV, int col, char *buf, int size) {
 }
 
 /* ─── 基类 WndProc (给无按钮的页面使用) / Base WndProc ─────────────── */
+/*
+ * DoctorPageWndProc — 医生页面基类窗口过程
+ *
+ * 功能:
+ *   为没有按钮交互的简单页面提供默认的窗口消息处理。
+ *   继承该 WndProc 的页面自动获得 WM_SIZE 自适应布局和 lpCreateParams 存取。
+ *
+ * 处理的消息:
+ *   WM_CREATE  — 保存 lpCreateParams (viewId) 到 GWLP_USERDATA
+ *   WM_SIZE    — 将所有子控件宽度设为父窗口宽度, 高度留 40px 底部边距
+ *   WM_COMMAND — 默认返回 0 (子类可重写)
+ *
+ * 说明:
+ *   这是一个基类 WndProc, 通过 RegisterClassA 注册后,
+ *   由 ReminderPageWndProc 等页面继承模式使用。
+ *   实际使用时各页面通常注册自己的 WndProc 并直接处理 WM_COMMAND,
+ *   所以此基类主要用于概念上的模板参考。
+ */
 LRESULT CALLBACK DoctorPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
@@ -472,6 +490,30 @@ static int  g_lastFocusedEditId = 3202;  /* 记录模板按钮点击前最后获
 static char g_consultPatientId[MAX_ID] = "";
 static char g_consultRecordId[MAX_ID] = "";
 
+/*
+ * ReminderPageWndProc — 待接诊页面窗口过程
+ *
+ * 功能:
+ *   显示当前医生当天所有"待就诊"的预约患者和现场排队患者。
+ *   医生选中一个患者后点击"接诊选中患者"按钮, 跳转到接诊页面。
+ *
+ * 处理的消息:
+ *   WM_CREATE        — 保存 viewId 到 GWLP_USERDATA
+ *   WM_CTLCOLORSTATIC — 将急诊横幅(3010)文字颜色设为红色(RGB 200,30,30)
+ *   WM_SIZE          — 自适应布局: 横幅/标签/列表/信息栏/按钮
+ *   WM_COMMAND       — 处理按钮点击
+ *
+ * 按钮处理:
+ *   3101 "接诊选中患者" — 获取选中行的单号(第1列), 存入 g_pendingApptId,
+ *                         清空接诊上下文, 切换到接诊页面(NAV_DOCTOR_CONSULTATION)
+ *
+ * 控件列表:
+ *   3010 — 急诊横幅 (STATIC, 红色文字, 仅在有急诊患者时显示)
+ *   3012 — 标题标签 "待接诊队列 (预约优先 → 现场排队)"
+ *   3001 — ListView 待接诊列表 (类型/单号/患者/日期时段/排队号/状态/急诊)
+ *   3014 — 统计信息 "待接诊: X人预约 + Y人现场 (共 Z人)"
+ *   3101 — 按钮 "接诊选中患者"
+ */
 static LRESULT CALLBACK ReminderPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
@@ -480,6 +522,7 @@ static LRESULT CALLBACK ReminderPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
         return 0;
     }
     case WM_CTLCOLORSTATIC: {
+        /* 将急诊横幅文字设为红色, 背景透明 */
         if ((HWND)lParam == GetDlgItem(hWnd, 3010)) {
             HDC hdc = (HDC)wParam;
             SetTextColor(hdc, RGB(200, 30, 30));
@@ -512,6 +555,7 @@ static LRESULT CALLBACK ReminderPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
         return 0;
     }
     case WM_COMMAND: {
+        /* 3101 — "接诊选中患者" 按钮: 获取选中预约/现场单号, 跳转到接诊页面 */
         if (LOWORD(wParam) == 3101) {
             HWND hLV = GetDlgItem(hWnd, 3001);
             char selId[MAX_ID] = "";
@@ -520,6 +564,7 @@ static LRESULT CALLBACK ReminderPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
                 MessageBoxA(GetParent(hWnd), "请先选择一个待接诊患者", "提示", MB_OK | MB_ICONINFORMATION);
                 return 0;
             }
+            /* 保存选中单号, 清空接诊上下文, 切换到接诊页面 */
             strcpy(g_pendingApptId, selId);
             g_consultPatientId[0] = 0;
             g_consultRecordId[0] = 0;
@@ -532,6 +577,28 @@ static LRESULT CALLBACK ReminderPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
     }
 }
 
+/*
+ * CreateReminderPage — 创建待接诊页面
+ *
+ * 功能:
+ *   创建医生待接诊列表页面, 展示当天该医生的所有预约患者(优先)和现场排队患者。
+ *   如果有急诊患者, 顶部显示红色横幅提醒。
+ *
+ * 处理流程:
+ *   1. 注册窗口类 "DocRemPage" 并创建子窗口
+ *   2. 加载患者/科室/现场排队数据, 统计急诊患者数
+ *   3. 若急诊患者数 > 0, 显示红色横幅 (3010)
+ *   4. 创建标题标签 (3012) 和 ListView (3001, 7列)
+ *   5. 填入数据: 先遍历预约(appointment)记录, 再遍历现场排队(onsite)记录
+ *   6. 显示统计信息 (3014) 和 "接诊选中患者" 按钮 (3101)
+ *
+ * 控件列表:
+ *   3010 — 急诊横幅 (红色STATIC, 仅当 emergCount > 0)
+ *   3012 — 标题标签 "待接诊队列 (预约优先 → 现场排队)"
+ *   3001 — ListView (7列: 类型/单号/患者/日期时段/排队号/状态/急诊)
+ *   3014 — 统计信息 STATIC
+ *   3101 — BUTTON "接诊选中患者"
+ */
 static HWND CreateReminderPage(HWND hParent, RECT *rc) {
     WNDCLASSA wc = {0};
     wc.lpfnWndProc   = ReminderPageWndProc;
@@ -695,9 +762,52 @@ static HWND CreateReminderPage(HWND hParent, RECT *rc) {
 
 /* ─── 接诊页面 / Consultation Page ───────────────────────────────────── */
 
-/* ConsultationPageWndProc: 选择待就诊患者 → 填写诊断+治疗建议 →
-   完成诊断 → 更新预约状态为"已就诊" → 推进患者治疗阶段 → 可选开药 */
-
+/*
+ * ConsultationPageWndProc — 接诊页面窗口过程
+ *
+ * 功能:
+ *   医生选择待就诊患者, 填写诊断和治疗建议, 完成诊断后更新预约/现场排队状态,
+ *   推进患者治疗阶段, 并可进一步开药/安排病房/其他医疗服务。
+ *
+ * 处理的消息:
+ *   WM_CREATE  — 保存 viewId 到 GWLP_USERDATA
+ *   WM_COMMAND — 处理按钮点击 (BN_CLICKED) 和编辑框焦点 (EN_SETFOCUS)
+ *
+ * 处理流程 (按按钮):
+ *   3204 "完成诊断":
+ *     1) 获取选中单号 (预约或现场)
+ *     2) 读取诊断(3202)和治疗建议(3203)编辑框内容
+ *     3) 校验诊断非空
+ *     4) 根据单号前缀 (OS=现场 / 其他=预约) 更新对应状态为"已就诊"
+ *     5) 创建就诊记录(MedicalRecord)并保存
+ *     6) 推进患者治疗阶段 (调用 get_next_stage)
+ *     7) 保存接诊上下文 (g_consultPatientId / g_consultRecordId) 供后续按钮使用
+ *     8) 刷新页面
+ *
+ *   3205 "使用模板":
+ *     根据最后获得焦点的编辑框(g_lastFocusedEditId: 3202=诊断/3203=治疗建议),
+ *     在编辑框末尾查找快捷码并展开, 或弹出模板菜单供选择
+ *
+ *   3206 "安排病房":
+ *     弹出病房列表菜单, 选择后扣减病房剩余床位, 将病房ID写入现场挂号记录
+ *
+ *   3207 "开药":
+ *     打开开药对话框(ShowDrugDispenseDialog)进行药品搜索/添加/确认
+ *
+ *   3208 "其他医疗服务":
+ *     弹出医疗服务菜单(艾灸/拔罐/针灸/推拿/理疗/中药熏蒸/穴位贴敷),
+ *     选择后创建 OtherService 记录
+ *
+ * 控件列表:
+ *   3002 — ListView 接诊列表 (类型/单号/患者/日期时段/状态)
+ *   3202 — EDIT 诊断输入 (多行)
+ *   3203 — EDIT 治疗建议输入 (多行)
+ *   3204 — BUTTON "完成诊断"
+ *   3205 — BUTTON "使用模板"
+ *   3206 — BUTTON "安排病房"
+ *   3207 — BUTTON "开药"
+ *   3208 — BUTTON "其他医疗服务"
+ */
 static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
@@ -706,11 +816,13 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
         return 0;
     }
     case WM_COMMAND: {
+        /* 跟踪最后获得焦点的编辑框 (用于模板按钮确定目标) */
         if (HIWORD(wParam) == EN_SETFOCUS &&
             (LOWORD(wParam) == 3202 || LOWORD(wParam) == 3203)) {
             g_lastFocusedEditId = LOWORD(wParam);
             return 0;
         }
+        /* 3204 — "完成诊断" 按钮: 完成诊断流程 */
         if (LOWORD(wParam) == 3204) {
             const char *did = GetDoctorId();
             if (strlen(did) == 0) {
@@ -741,10 +853,12 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 return 0;
             }
 
+            /* 判断单号类型: OS开头=现场排队, 否则=预约 */
             int isOnsite = (strncmp(svcId, "OS", 2) == 0);
             char savedPatientId[MAX_ID] = "";
             char savedDeptId[MAX_ID] = "";
 
+            /* 更新排队/预约状态为"已就诊" */
             if (isOnsite) {
                 OnsiteRegistrationQueue onQ = load_onsite_registration_queue();
                 OnsiteRegistrationNode *on = onQ.front;
@@ -757,8 +871,10 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                             MessageBoxA(GetParent(hWnd), "该患者已就诊，不能重复就诊", "提示", MB_OK | MB_ICONWARNING);
                             return 0;
                         }
-                        strcpy(savedPatientId, on->data.patient_id);
-                        strcpy(savedDeptId, on->data.department_id);
+                        strncpy(savedPatientId, on->data.patient_id, MAX_ID - 1);
+                        savedPatientId[MAX_ID - 1] = '\0';
+                        strncpy(savedDeptId, on->data.department_id, MAX_ID - 1);
+                        savedDeptId[MAX_ID - 1] = '\0';
                         strcpy(on->data.status, "已就诊");
                         found = 1;
                         break;
@@ -795,14 +911,16 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                     MessageBoxA(GetParent(hWnd), "该患者已就诊，不能重复就诊", "提示", MB_OK | MB_ICONWARNING);
                     return 0;
                 }
-                strcpy(savedPatientId, appt->patient_id);
-                strcpy(savedDeptId, appt->department_id);
+                strncpy(savedPatientId, appt->patient_id, MAX_ID - 1);
+                savedPatientId[MAX_ID - 1] = '\0';
+                strncpy(savedDeptId, appt->department_id, MAX_ID - 1);
+                savedDeptId[MAX_ID - 1] = '\0';
                 strcpy(appt->status, "已就诊");
                 save_appointments_list(apps);
                 free_appointment_list(apps);
             }
 
-            /* 创建就诊记录 / Create medical record */
+            /* 步骤1: 创建就诊记录 / Step 1: Create medical record */
             MedicalRecord rec;
             memset(&rec, 0, sizeof(rec));
             generate_id(rec.record_id, sizeof(rec.record_id), "MR");
@@ -823,7 +941,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 free_medical_record_list(recs);
             }
 
-            /* 更新患者治疗阶段 / Update patient treatment stage */
+            /* 步骤2: 推进患者治疗阶段 / Step 2: Advance patient treatment stage */
             PatientNode *pts = load_patients_list();
             if (pts) {
                 PatientNode *cur = pts;
@@ -850,6 +968,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
             PostMessage(GetParent(hWnd), WM_APP_REFRESH, NAV_DOCTOR_CONSULTATION, 0);
         }
 
+        /* 3205 — "使用模板" 按钮: 快捷码展开或弹出模板菜单 */
         if (LOWORD(wParam) == 3205) { /* Use Template / Shortcut expansion */
             TemplateNode *tmpls = load_templates_list();
             if (!tmpls) {
@@ -862,6 +981,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
             char currentText[500] = "";
             GetWindowTextA(hTarget, currentText, sizeof(currentText));
 
+            /* 尝试快捷码展开: 取编辑框末尾单词匹配模板快捷码或模板ID */
             /* If text ends with a shortcut code, expand it. Otherwise show menu. */
             int expanded = 0;
             char *lastWord = strrchr(currentText, ' ');
@@ -883,6 +1003,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 }
             }
 
+            /* 未匹配快捷码时弹出模板选择菜单 */
             if (!expanded) {
                 HMENU hMenu = CreatePopupMenu();
                 int i = 0;
@@ -915,6 +1036,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
             return 0;
         }
 
+        /* 3206 — "安排病房" 按钮: 弹出病房菜单, 选择后扣减床位并记录 */
         if (LOWORD(wParam) == 3206) { /* 安排病房 / Assign Ward */
             if (g_consultPatientId[0] == 0) {
                 MessageBoxA(GetParent(hWnd), "请先完成诊断", "提示", MB_OK | MB_ICONINFORMATION);
@@ -936,6 +1058,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
             int sel = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_LEFTALIGN,
                                      pt.x, pt.y, 0, hWnd, NULL);
             DestroyMenu(hMenu);
+            /* 处理病房选择: 扣减床位并记录到现场挂号 */
             if (sel >= 5000) {
                 int idx = sel - 5000;
                 curW = wards;
@@ -943,21 +1066,19 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
                 if (curW->data.remain_beds > 0) {
                     curW->data.remain_beds--;
                     save_wards_list(wards);
-                    /* 将病房分配记录到患者的现场挂号中 */
+                    /* 将病房分配保存到患者档案 */
                     {
-                        OnsiteRegistrationQueue oq = load_onsite_registration_queue();
-                        OnsiteRegistrationNode *orn = oq.front;
-                        while (orn) {
-                            if (strcmp(orn->data.patient_id, g_consultPatientId) == 0 &&
-                                (strcmp(orn->data.status, "已接诊") == 0 ||
-                                 strcmp(orn->data.status, "排队中") == 0)) {
-                                strcpy(orn->data.ward_id, curW->data.ward_id);
+                        PatientNode *patients = load_patients_list();
+                        PatientNode *pn = patients;
+                        while (pn) {
+                            if (strcmp(pn->data.patient_id, g_consultPatientId) == 0) {
+                                strcpy(pn->data.ward_id, curW->data.ward_id);
                                 break;
                             }
-                            orn = orn->next;
+                            pn = pn->next;
                         }
-                        save_onsite_registration_queue(&oq);
-                        free_onsite_registration_queue(&oq);
+                        save_patients_list(patients);
+                        free_patient_list(patients);
                     }
                     append_log(g_currentUser.username, "安排病房", "ward",
                                curW->data.ward_id, g_consultPatientId);
@@ -970,6 +1091,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
             return 0;
         }
 
+        /* 3207 — "开药" 按钮: 打开开药对话框 */
         if (LOWORD(wParam) == 3207) { /* 开药 / Prescribe Drug */
             if (g_consultPatientId[0] == 0) {
                 MessageBoxA(GetParent(hWnd), "请先完成诊断", "提示", MB_OK | MB_ICONINFORMATION);
@@ -985,6 +1107,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
             return 0;
         }
 
+        /* 3208 — "其他医疗服务" 按钮: 弹出医疗服务菜单, 创建 OtherService 记录 */
         if (LOWORD(wParam) == 3208) { /* 其他医疗服务 / Other Medical Services */
             if (g_consultPatientId[0] == 0) {
                 MessageBoxA(GetParent(hWnd), "请先完成诊断", "提示", MB_OK | MB_ICONINFORMATION);
@@ -1010,6 +1133,7 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
             POINT pt; GetCursorPos(&pt);
             int sel = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, NULL);
             DestroyMenu(hMenu);
+            /* 创建 OtherService 记录并保存 */
             if (sel >= 5100 && sel < 5100 + nServices) {
                 int idx = sel - 5100;
                 OtherService svc;
@@ -1053,6 +1177,33 @@ static LRESULT CALLBACK ConsultationPageWndProc(HWND hWnd, UINT msg, WPARAM wPar
     }
 }
 
+/*
+ * CreateConsultationPage — 创建接诊页面
+ *
+ * 功能:
+ *   创建医生接诊界面, 包含接诊列表(预约优先→现场排队)、诊断编辑框、
+ *   治疗建议编辑框, 以及完成诊断/使用模板/安排病房/开药/其他医疗服务等按钮。
+ *
+ * 处理流程:
+ *   1. 注册窗口类 "DocConsPage" 并创建子窗口
+ *   2. 创建标题标签和 ListView (3002, 5列: 类型/单号/患者/日期时段/状态)
+ *   3. 填入数据: 先遍历预约记录, 再遍历现场排队记录
+ *   4. 如果 g_pendingApptId 非空(从待接诊页面跳转过来), 自动预选中对应行
+ *   5. 创建诊断编辑框(3202)和治疗建议编辑框(3203)
+ *   6. 创建操作按钮:
+ *      3204 "完成诊断" / 3205 "使用模板" / 3206 "安排病房" / 3207 "开药" / 3208 "其他医疗服务"
+ *   7. 如果有待接诊传入的单号或已有接诊上下文, 显示提示标签
+ *
+ * 控件列表:
+ *   3002 — ListView 接诊列表 (5列)
+ *   3202 — EDIT 诊断输入 (多行, 60px高)
+ *   3203 — EDIT 治疗建议输入 (多行, 60px高)
+ *   3204 — BUTTON "完成诊断"
+ *   3205 — BUTTON "使用模板"
+ *   3206 — BUTTON "安排病房"
+ *   3207 — BUTTON "开药"
+ *   3208 — BUTTON "其他医疗服务"
+ */
 static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
     WNDCLASSA wc = {0};
     wc.lpfnWndProc   = ConsultationPageWndProc;
@@ -1239,6 +1390,25 @@ static HWND CreateConsultationPage(HWND hParent, RECT *rc) {
 
 /* ─── 病房呼叫页面 / Ward Call Page ──────────────────────────────────── */
 
+/*
+ * WardCallPageWndProc — 病房呼叫页面窗口过程
+ *
+ * 功能:
+ *   展示所有病房呼叫记录, 医生可更改呼叫状态 (待响应→已响应→已处理→已完成)。
+ *
+ * 处理的消息:
+ *   WM_CREATE  — 保存 viewId 到 GWLP_USERDATA
+ *   WM_COMMAND — 处理按钮点击
+ *
+ * 按钮处理:
+ *   3401 "更改状态":
+ *     获取选中呼叫ID, 弹出状态菜单(待响应/已响应/已处理/已完成),
+ *     选择后更新 WardCall 记录的 status 字段, 记录审计日志, 刷新页面
+ *
+ * 控件列表:
+ *   3004 — ListView 呼叫列表 (呼叫ID/病房/患者ID/患者姓名/消息/状态)
+ *   3401 — BUTTON "更改状态"
+ */
 static LRESULT CALLBACK WardCallPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
@@ -1247,6 +1417,7 @@ static LRESULT CALLBACK WardCallPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
         return 0;
     }
     case WM_COMMAND: {
+        /* 3401 — "更改状态" 按钮: 弹出状态菜单, 更新选中呼叫的状态 */
         if (LOWORD(wParam) == 3401) {
             HWND hLV = GetDlgItem(hWnd, 3004);
             if (!hLV) return 0;
@@ -1297,6 +1468,23 @@ static LRESULT CALLBACK WardCallPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
     }
 }
 
+/*
+ * CreateWardCallPage — 创建病房呼叫页面
+ *
+ * 功能:
+ *   创建病房呼叫管理界面, 列出所有病房呼叫记录(加载患者姓名和病房类型),
+ *   提供"更改状态"按钮支持状态流转。
+ *
+ * 处理流程:
+ *   1. 注册窗口类 "DocWCnPage" 并创建子窗口
+ *   2. 创建 ListView (3004, 6列: 呼叫ID/病房/患者ID/患者姓名/消息/状态)
+ *   3. 加载呼叫/患者/病房数据, 交叉关联填充 ListView
+ *   4. 创建 "更改状态" 按钮 (3401)
+ *
+ * 控件列表:
+ *   3004 — ListView (6列)
+ *   3401 — BUTTON "更改状态"
+ */
 static HWND CreateWardCallPage(HWND hParent, RECT *rc) {
     WNDCLASSA wc = {0};
     wc.lpfnWndProc   = WardCallPageWndProc;
@@ -1372,6 +1560,26 @@ static HWND CreateWardCallPage(HWND hParent, RECT *rc) {
 
 /* ─── 紧急标记页面 / Emergency Flag Page ─────────────────────────────── */
 
+/*
+ * EmergencyPageWndProc — 紧急标记页面窗口过程
+ *
+ * 功能:
+ *   显示所有患者列表, 医生可切换患者的紧急标记 (is_emergency)。
+ *   紧急标记用于指示该患者需要优先接诊, 在待接诊页面中会显示红色横幅提醒。
+ *
+ * 处理的消息:
+ *   WM_CREATE  — 保存 viewId 到 GWLP_USERDATA
+ *   WM_COMMAND — 处理按钮点击
+ *
+ * 按钮处理:
+ *   3501 "标记/取消紧急":
+ *     获取选中患者ID, 切换其 is_emergency 字段 (true↔false),
+ *     保存患者数据, 记录审计日志, 刷新页面
+ *
+ * 控件列表:
+ *   3005 — ListView 患者列表 (患者ID/姓名/紧急)
+ *   3501 — BUTTON "标记/取消紧急"
+ */
 static LRESULT CALLBACK EmergencyPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
@@ -1380,6 +1588,7 @@ static LRESULT CALLBACK EmergencyPageWndProc(HWND hWnd, UINT msg, WPARAM wParam,
         return 0;
     }
     case WM_COMMAND: {
+        /* 3501 — "标记/取消紧急" 按钮: 切换选中患者的紧急状态 */
         if (LOWORD(wParam) == 3501) {
             HWND hLV = GetDlgItem(hWnd, 3005);
             if (!hLV) return 0;
@@ -1413,6 +1622,23 @@ static LRESULT CALLBACK EmergencyPageWndProc(HWND hWnd, UINT msg, WPARAM wParam,
     }
 }
 
+/*
+ * CreateEmergencyPage — 创建紧急标记页面
+ *
+ * 功能:
+ *   创建紧急标记管理界面, 列出所有患者及其紧急状态, 提供切换按钮。
+ *
+ * 处理流程:
+ *   1. 注册窗口类 "DocEmgPage" 并创建子窗口
+ *   2. 创建说明标签 (STATIC x2)
+ *   3. 创建 ListView (3005, 3列: 患者ID/姓名/紧急)
+ *   4. 加载患者数据填充列表
+ *   5. 创建 "标记/取消紧急" 按钮 (3501)
+ *
+ * 控件列表:
+ *   3005 — ListView (3列)
+ *   3501 — BUTTON "标记/取消紧急"
+ */
 static HWND CreateEmergencyPage(HWND hParent, RECT *rc) {
     WNDCLASSA wc = {0};
     wc.lpfnWndProc   = EmergencyPageWndProc;
@@ -1466,6 +1692,30 @@ static HWND CreateEmergencyPage(HWND hParent, RECT *rc) {
 
 /* ─── 进度更新页面 / Progress Update Page ────────────────────────────── */
 
+/*
+ * ProgressPageWndProc — 进度更新页面窗口过程
+ *
+ * 功能:
+ *   显示所有患者及其治疗阶段, 医生可通过弹出菜单更新患者的治疗阶段。
+ *
+ * 处理的消息:
+ *   WM_CREATE  — 保存 viewId 到 GWLP_USERDATA
+ *   WM_COMMAND — 处理按钮点击
+ *
+ * 按钮处理:
+ *   3601 "更新选中患者阶段":
+ *     获取选中患者ID, 弹出阶段选择菜单:
+ *       4001 "初诊"
+ *       4002 "检查中"
+ *       4003 "治疗中"
+ *       4004 "康复观察"
+ *       4005 "已出院"
+ *     选择后更新患者 treatment_stage, 记录审计日志, 刷新页面
+ *
+ * 控件列表:
+ *   3006 — ListView 患者列表 (患者ID/姓名/当前阶段)
+ *   3601 — BUTTON "更新选中患者阶段"
+ */
 static LRESULT CALLBACK ProgressPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
@@ -1475,6 +1725,7 @@ static LRESULT CALLBACK ProgressPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
     }
     case WM_COMMAND: {
         int cmd = LOWORD(wParam);
+        /* 3601 — "更新选中患者阶段" 按钮: 弹出阶段菜单, 更新患者治疗阶段 */
         if (cmd == 3601) {
             HWND hLV = GetDlgItem(hWnd, 3006);
             if (!hLV) return 0;
@@ -1527,6 +1778,23 @@ static LRESULT CALLBACK ProgressPageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
     }
 }
 
+/*
+ * CreateProgressPage — 创建进度更新页面
+ *
+ * 功能:
+ *   创建治疗阶段管理界面, 展示所有患者及其当前阶段, 提供阶段更新按钮。
+ *
+ * 处理流程:
+ *   1. 注册窗口类 "DocProgPage" 并创建子窗口
+ *   2. 创建说明标签
+ *   3. 创建 ListView (3006, 3列: 患者ID/姓名/当前阶段)
+ *   4. 加载患者数据填充列表
+ *   5. 创建 "更新选中患者阶段" 按钮 (3601)
+ *
+ * 控件列表:
+ *   3006 — ListView (3列)
+ *   3601 — BUTTON "更新选中患者阶段"
+ */
 static HWND CreateProgressPage(HWND hParent, RECT *rc) {
     WNDCLASSA wc = {0};
     wc.lpfnWndProc   = ProgressPageWndProc;
@@ -1575,12 +1843,45 @@ static HWND CreateProgressPage(HWND hParent, RECT *rc) {
 
 /* ─── 病历模板页面 / Medical Template Page ──────────────────────────── */
 
+/*
+ * TemplatePageWndProc — 病历模板页面窗口过程
+ *
+ * 功能:
+ *   管理病历模板的完整 CRUD 生命周期 (新增/修改/删除/刷新)。
+ *   模板编辑通过 TemplateEditDlgProc 模态对话框完成。
+ *   模板在接诊页面的"使用模板"功能中被引用, 通过快捷码或菜单选择快速填充诊断文本。
+ *
+ * 处理流程 (按按钮):
+ *   3604 "刷新" — 重新加载模板列表并刷新 ListView
+ *   3601 "新增" — 打开空白编辑对话框, 确认后生成模板ID并保存
+ *   3602 "修改" — 选中模板→加载数据→打开编辑对话框→确认后原地更新
+ *   3603 "删除" — 选中模板→确认对话框→从链表中移除并释放
+ *
+ * 处理的消息:
+ *   WM_CREATE  — 保存 viewId 到 GWLP_USERDATA
+ *   WM_SIZE    — 自适应 ListView 宽高
+ *   WM_COMMAND — 处理 BN_CLICKED (3601~3604)
+ *
+ * 控件列表:
+ *   3007 — ListView 模板列表 (模板ID/分类/快捷码/内容)
+ *   3601 — BUTTON "新增"
+ *   3602 — BUTTON "修改"
+ *   3603 — BUTTON "删除"
+ *   3604 — BUTTON "刷新"
+ */
+
 /* TemplatePageWndProc: 模板 CRUD (新增/修改/删除/刷新)
    模板编辑通过 TemplateEditDlgProc 模态对话框完成 */
 
 static MedicalTemplate g_editTmpl;
 static int g_tmplResult = -1;
 
+/*
+ * RefreshTmplList — 刷新模板列表显示
+ *
+ * 功能:
+ *   清空并重新加载模板 ListView (3007), 将内容中的换行符替换为空格避免错行。
+ */
 static void RefreshTmplList(HWND hPage) {
     HWND hLV = GetDlgItem(hPage, 3007);
     if (!hLV) return;
@@ -1607,6 +1908,28 @@ static void RefreshTmplList(HWND hPage) {
     }
 }
 
+/*
+ * TemplateEditDlgProc — 模板编辑对话框窗口过程
+ *
+ * 功能:
+ *   模态对话框, 用于新增或修改病历模板。
+ *   提供分类(100)、快捷码(101)、内容(102)三个编辑框, 以及确定(1)/取消(2)按钮。
+ *   通过 WM_CREATE 时传入的 MedicalTemplate 指针初始化编辑框内容,
+ *   确定时从编辑框读回数据并设置 g_tmplResult = 1 退出。
+ *
+ * 处理流程:
+ *   1. WM_CREATE: 从 lpCreateParams 复制模板数据到 g_editTmpl
+ *   2. 用户编辑分类/快捷码/内容
+ *   3. 确定(1): 读回编辑框内容, 校验非空, 设置 g_tmplResult=1, DestroyWindow
+ *   4. 取消(2)/WM_CLOSE: 设置 g_tmplResult=0, DestroyWindow
+ *
+ * 控件列表:
+ *   100 — EDIT 分类
+ *   101 — EDIT 快捷码
+ *   102 — EDIT 内容 (多行, 150px高)
+ *   1   — BUTTON "确定"
+ *   2   — BUTTON "取消"
+ */
 static LRESULT CALLBACK TemplateEditDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
@@ -1644,6 +1967,7 @@ static LRESULT CALLBACK TemplateEditDlgProc(HWND hDlg, UINT msg, WPARAM wParam, 
     }
     case WM_COMMAND: {
         int id = LOWORD(wParam);
+        /* 1 — "确定" 按钮: 读取编辑框内容, 校验非空, 设置结果并关闭 */
         if (id == 1) {
             GetDlgItemTextA(hDlg, 100, g_editTmpl.category, sizeof(g_editTmpl.category));
             GetDlgItemTextA(hDlg, 101, g_editTmpl.shortcut, sizeof(g_editTmpl.shortcut));
@@ -1657,6 +1981,7 @@ static LRESULT CALLBACK TemplateEditDlgProc(HWND hDlg, UINT msg, WPARAM wParam, 
             DestroyWindow(hDlg);
             return 0;
         }
+        /* 2 — "取消" 按钮: 放弃编辑, 关闭对话框 */
         if (id == 2) {
             g_tmplResult = 0;
             DestroyWindow(hDlg);
@@ -1673,6 +1998,14 @@ static LRESULT CALLBACK TemplateEditDlgProc(HWND hDlg, UINT msg, WPARAM wParam, 
     }
 }
 
+/*
+ * ShowTemplateEditDialog — 显示模板编辑模态对话框
+ *
+ * 功能:
+ *   注册 "TmplEditDialog" 窗口类, 创建居中的模态对话框,
+ *   禁用父窗口, 自建消息循环直到用户确定或取消,
+ *   最后恢复父窗口并返回结果 (1=确定, 0=取消)。
+ */
 static int ShowTemplateEditDialog(HWND hParent, MedicalTemplate *tmpl, const char *title) {
     WNDCLASSA wc = {0};
     wc.lpfnWndProc   = TemplateEditDlgProc;
@@ -1729,11 +2062,13 @@ static LRESULT CALLBACK TemplatePageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
 
         HWND hLV = GetDlgItem(hWnd, 3007);
 
+        /* 3604 — "刷新" 按钮: 重新加载模板列表 */
         if (cmd == 3604) { /* 刷新 */
             RefreshTmplList(hWnd);
             return 0;
         }
 
+        /* 3601 — "新增" 按钮: 打开空白编辑对话框, 确认后生成ID并保存 */
         if (cmd == 3601) { /* 新增 */
             MedicalTemplate tmpl;
             memset(&tmpl, 0, sizeof(tmpl));
@@ -1753,6 +2088,7 @@ static LRESULT CALLBACK TemplatePageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
             return 0;
         }
 
+        /* 3602 — "修改" 按钮: 选中模板→加载数据→编辑→原地更新并保存 */
         if (cmd == 3602) { /* 修改 */
             if (!hLV) return 0;
             int sel = ListView_GetNextItem(hLV, -1, LVNI_SELECTED);
@@ -1798,6 +2134,7 @@ static LRESULT CALLBACK TemplatePageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
             return 0;
         }
 
+        /* 3603 — "删除" 按钮: 选中模板→确认对话框→从链表移除并释放 */
         if (cmd == 3603) { /* 删除 */
             if (!hLV) return 0;
             int sel = ListView_GetNextItem(hLV, -1, LVNI_SELECTED);
@@ -1839,6 +2176,26 @@ static LRESULT CALLBACK TemplatePageWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
     }
 }
 
+/*
+ * CreateTemplatePage — 创建病历模板页面
+ *
+ * 功能:
+ *   创建病历模板管理界面, 包含模板列表和 CRUD 按钮 (新增/修改/删除/刷新)。
+ *   初始加载并显示所有已保存的模板。
+ *
+ * 处理流程:
+ *   1. 注册窗口类 "DocTmplPage" 并创建子窗口
+ *   2. 创建 ListView (3007, 4列: 模板ID/分类/快捷码/内容)
+ *   3. 创建按钮行: 新增(3601) / 修改(3602) / 删除(3603) / 刷新(3604)
+ *   4. 调用 RefreshTmplList 加载模板数据
+ *
+ * 控件列表:
+ *   3007 — ListView (4列)
+ *   3601 — BUTTON "新增"
+ *   3602 — BUTTON "修改"
+ *   3603 — BUTTON "删除"
+ *   3604 — BUTTON "刷新"
+ */
 static HWND CreateTemplatePage(HWND hParent, RECT *rc) {
     WNDCLASSA wc = {0};
     wc.lpfnWndProc   = TemplatePageWndProc;
@@ -1879,6 +2236,17 @@ static HWND CreateTemplatePage(HWND hParent, RECT *rc) {
 
 /* ─── 后续医疗活动页面 / Follow-up Medical Activities Page ──────────── */
 
+/*
+ * RefreshPrescribeList — 刷新后续医疗活动的病历列表
+ *
+ * 功能:
+ *   清空并重新加载病历 ListView, 只显示当前医生的病历记录。
+ *   支持按患者姓名或患者ID过滤。
+ *
+ * 参数:
+ *   hLV    — ListView 句柄
+ *   filter — 可选的过滤字符串 (匹配患者姓名或患者ID), NULL 或空串表示不过滤
+ */
 static void RefreshPrescribeList(HWND hLV, const char *filter) {
     ListView_DeleteAllItems(hLV);
     const char *did = GetDoctorId();
@@ -1916,6 +2284,36 @@ static void RefreshPrescribeList(HWND hLV, const char *filter) {
     free_medical_record_list(records);
 }
 
+/*
+ * PrescribePageWndProc — 后续医疗活动页面窗口过程
+ *
+ * 功能:
+ *   显示当前医生的所有已就诊病历记录, 支持按患者姓名/ID搜索。
+ *   医生可选择病历记录后进行后续操作: 查看综合诊疗详情或开药。
+ *
+ * 处理的消息:
+ *   WM_CREATE  — 保存 viewId 到 GWLP_USERDATA
+ *   WM_SIZE    — 自适应布局: 搜索框/列表/按钮
+ *   WM_COMMAND — 处理搜索过滤和按钮点击
+ *
+ * 按钮处理:
+ *   3803 搜索框 EN_CHANGE — 实时过滤病历列表(按患者姓名或ID)
+ *   3804 "诊疗详情":
+ *     获取选中病历ID, 查询并综合展示:
+ *       - 病历基本信息 (病历ID/患者ID/诊断日期/诊断详情)
+ *       - 处方药品 (关联 Prescription 表)
+ *       - 病房安排 (关联 OnsiteRegistration 的 ward_id)
+ *       - 其他医疗服务 (关联 OtherService 表)
+ *   3802 "开药":
+ *     获取选中病历ID, 查询关联的患者ID,
+ *     打开开药对话框(ShowDrugDispenseDialog), 完成后刷新列表
+ *
+ * 控件列表:
+ *   3803 — EDIT 搜索框
+ *   3801 — ListView 病历列表 (病历ID/患者ID/患者姓名/诊断日期/状态)
+ *   3802 — BUTTON "开药"
+ *   3804 — BUTTON "诊疗详情"
+ */
 static LRESULT CALLBACK PrescribePageWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
@@ -1939,6 +2337,7 @@ static LRESULT CALLBACK PrescribePageWndProc(HWND hWnd, UINT msg, WPARAM wParam,
         int id = LOWORD(wParam);
         int code = HIWORD(wParam);
 
+        /* 3803 — 搜索框: 实时过滤病历列表 (按患者姓名或ID) */
         if (id == 3803 && code == EN_CHANGE) {
             char filter[50] = "";
             GetWindowTextA((HWND)lParam, filter, sizeof(filter));
@@ -1946,6 +2345,7 @@ static LRESULT CALLBACK PrescribePageWndProc(HWND hWnd, UINT msg, WPARAM wParam,
             return 0;
         }
 
+        /* 3802/3804 — "开药" 或 "诊疗详情" 按钮: 需先选中病历记录 */
         if (id == 3802 || id == 3804) { /* 开药 or 详情 */
             HWND hLV = GetDlgItem(hWnd, 3801);
             char recordId[MAX_ID] = "";
@@ -1997,33 +2397,30 @@ static LRESULT CALLBACK PrescribePageWndProc(HWND hWnd, UINT msg, WPARAM wParam,
                         }
                         if (!rxFound) strncat(msg, "  (无)\r\n", sizeof(msg) - strlen(msg) - 1);
 
-                        /* 查询病房安排 — 优先从现场挂号记录中查找 */
-                        strncat(msg, "\r\n──── 病房安排 ────\r\n", sizeof(msg) - strlen(msg) - 1);
+                        /* 查询病房安排 — 从患者档案中查找 */
+                        strncat(msg, "──── 病房安排 ────", sizeof(msg) - strlen(msg) - 1);
                         int wardFound = 0;
                         {
-                            OnsiteRegistrationQueue oq = load_onsite_registration_queue();
-                            WardNode *wards = load_wards_list();
-                            for (OnsiteRegistrationNode *orn = oq.front; orn; orn = orn->next) {
-                                if (strcmp(orn->data.patient_id, cur->data.patient_id) == 0
-                                    && orn->data.ward_id[0]) {
-                                    const char *wardName = orn->data.ward_id;
-                                    float wardPrice = 0;
-                                    if (wards) {
-                                        for (WardNode *w = wards; w; w = w->next) {
-                                            if (strcmp(w->data.ward_id, orn->data.ward_id) == 0)
-                                            { wardName = w->data.type; wardPrice = w->data.price_per_day; break; }
-                                        }
+                            Patient *pat = find_patient_by_id(cur->data.patient_id);
+                            if (pat && pat->ward_id[0]) {
+                                const char *wardName = pat->ward_id;
+                                float wardPrice = 0;
+                                WardNode *wards = load_wards_list();
+                                if (wards) {
+                                    for (WardNode *w = wards; w; w = w->next) {
+                                        if (strcmp(w->data.ward_id, pat->ward_id) == 0)
+                                        { wardName = w->data.type; wardPrice = w->data.price_per_day; break; }
                                     }
-                                    snprintf(buf, sizeof(buf), "  病房: %s (%s)  费用: %.0f元/天\r\n",
-                                             orn->data.ward_id, wardName, wardPrice);
-                                    strncat(msg, buf, sizeof(msg) - strlen(msg) - 1);
-                                    wardFound++;
+                                    free_ward_list(wards);
                                 }
+                                snprintf(buf, sizeof(buf), "  病房: %s (%s)  费用: %.0f元/天",
+                                         pat->ward_id, wardName, wardPrice);
+                                strncat(msg, buf, sizeof(msg) - strlen(msg) - 1);
+                                wardFound++;
                             }
-                            if (wards) free_ward_list(wards);
-                            free_onsite_registration_queue(&oq);
+                            if (pat) free(pat);
                         }
-                        if (!wardFound) strncat(msg, "  (无)\r\n", sizeof(msg) - strlen(msg) - 1);
+                        if (!wardFound) strncat(msg, "  (无)", sizeof(msg) - strlen(msg) - 1);
 
                         /* 查询其他医疗服务 */
                         strncat(msg, "\r\n──── 其他医疗服务 ────\r\n", sizeof(msg) - strlen(msg) - 1);
@@ -2082,6 +2479,26 @@ static LRESULT CALLBACK PrescribePageWndProc(HWND hWnd, UINT msg, WPARAM wParam,
     }
 }
 
+/*
+ * CreatePrescribePage — 创建后续医疗活动页面
+ *
+ * 功能:
+ *   创建后续医疗活动界面, 展示当前医生的所有已就诊病历,
+ *   提供搜索过滤、开药和查看诊疗详情功能。
+ *
+ * 处理流程:
+ *   1. 注册窗口类 "DocRxPage" 并创建子窗口
+ *   2. 创建搜索标签和搜索编辑框 (3803)
+ *   3. 创建 ListView (3801, 5列: 病历ID/患者ID/患者姓名/诊断日期/状态)
+ *   4. 创建按钮: "开药" (3802) / "诊疗详情" (3804)
+ *   5. 调用 RefreshPrescribeList 加载病历数据
+ *
+ * 控件列表:
+ *   3803 — EDIT 搜索框
+ *   3801 — ListView (5列)
+ *   3802 — BUTTON "开药"
+ *   3804 — BUTTON "诊疗详情"
+ */
 static HWND CreatePrescribePage(HWND hParent, RECT *rc) {
     WNDCLASSA wc = {0};
     wc.lpfnWndProc   = PrescribePageWndProc;
@@ -2118,6 +2535,32 @@ static HWND CreatePrescribePage(HWND hParent, RECT *rc) {
 
 /* ─── 修改密码页面 / Change Password Page ──────────────────────────── */
 
+/*
+ * DocChangePwdWndProc — 修改密码页面窗口过程
+ *
+ * 功能:
+ *   提供医生修改登录密码的界面。验证旧密码正确后, 将新密码 SHA256 哈希后保存。
+ *
+ * 处理的消息:
+ *   WM_CREATE  — 保存 viewId 到 GWLP_USERDATA
+ *   WM_COMMAND — 处理 BN_CLICKED (1030 "确认修改")
+ *
+ * 按钮处理:
+ *   1030 "确认修改":
+ *     1) 读取旧密码(1032)/新密码(1033)/确认密码(1034)
+ *     2) 校验所有字段非空
+ *     3) 校验新密码与确认密码一致
+ *     4) SHA256 哈希旧密码, 与当前用户密码比对
+ *     5) SHA256 哈希新密码, 更新用户数据并保存
+ *     6) 更新 g_currentUser.password
+ *     7) 记录审计日志
+ *
+ * 控件列表:
+ *   1032 — EDIT 旧密码 (ES_PASSWORD)
+ *   1033 — EDIT 新密码 (ES_PASSWORD)
+ *   1034 — EDIT 确认密码 (ES_PASSWORD)
+ *   1030 — BUTTON "确认修改"
+ */
 static LRESULT CALLBACK DocChangePwdWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
@@ -2127,6 +2570,7 @@ static LRESULT CALLBACK DocChangePwdWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
     }
     case WM_COMMAND:
         if (HIWORD(wParam) != BN_CLICKED) return 0;
+        /* 1030 — "确认修改" 按钮: 验证旧密码, 更新为新密码 */
         if (LOWORD(wParam) == 1030) {
             char oldPwd[100] = "", newPwd[100] = "", confirmPwd[100] = "";
             GetDlgItemTextA(hWnd, 1032, oldPwd, sizeof(oldPwd));
@@ -2179,6 +2623,25 @@ static LRESULT CALLBACK DocChangePwdWndProc(HWND hWnd, UINT msg, WPARAM wParam, 
     }
 }
 
+/*
+ * CreateChangePwdPage — 创建修改密码页面
+ *
+ * 功能:
+ *   创建修改密码界面, 包含旧密码/新密码/确认密码三个输入框和确认按钮。
+ *
+ * 处理流程:
+ *   1. 注册窗口类 "DocChgPwdPage" 并创建子窗口
+ *   2. 创建标题 "修改密码" (STATIC)
+ *   3. 创建三个密码输入框: 旧密码(1032)/新密码(1033)/确认密码(1034)
+ *      (均使用 ES_PASSWORD 风格隐藏输入字符)
+ *   4. 创建 "确认修改" 按钮 (1030)
+ *
+ * 控件列表:
+ *   1032 — EDIT 旧密码 (ES_PASSWORD)
+ *   1033 — EDIT 新密码 (ES_PASSWORD)
+ *   1034 — EDIT 确认密码 (ES_PASSWORD)
+ *   1030 — BUTTON "确认修改"
+ */
 static HWND CreateChangePwdPage(HWND hParent, RECT *rc) {
     WNDCLASSA wc = {0};
     wc.lpfnWndProc   = DocChangePwdWndProc;
@@ -2231,6 +2694,32 @@ static HWND CreateChangePwdPage(HWND hParent, RECT *rc) {
 }
 
 /* ─── 公开接口 / Public Interface ────────────────────────────────────── */
+
+/*
+ * CreateDoctorPage — 医生页面工厂函数
+ *
+ * 功能:
+ *   根据 viewId 路由到对应的页面创建函数, 返回创建的子窗口句柄。
+ *   这是医生模块的唯一对外接口, 由主窗口 (gui_main) 调用。
+ *
+ * 路由表:
+ *   NAV_DOCTOR_REMINDER     → CreateReminderPage     (待接诊)
+ *   NAV_DOCTOR_CONSULTATION → CreateConsultationPage (接诊)
+ *   NAV_DOCTOR_WARD_CALL    → CreateWardCallPage     (病房呼叫)
+ *   NAV_DOCTOR_EMERGENCY    → CreateEmergencyPage    (紧急标记)
+ *   NAV_DOCTOR_PROGRESS     → CreateProgressPage     (进度更新)
+ *   NAV_DOCTOR_TEMPLATE     → CreateTemplatePage     (病历模板)
+ *   NAV_DOCTOR_PRESCRIBE    → CreatePrescribePage    (后续医疗活动)
+ *   NAV_DOCTOR_CHANGE_PWD   → CreateChangePwdPage    (修改密码)
+ *
+ * 参数:
+ *   hParent — 父窗口句柄
+ *   viewId  — 页面标识 (NAV_DOCTOR_* 枚举)
+ *   rc      — 页面矩形区域
+ *
+ * 返回值:
+ *   成功返回子窗口 HWND, 失败返回 NULL
+ */
 
 /* CreateDoctorPage — 工厂函数, 按 viewId 路由到各页面创建函数
    Factory function routing viewId to the appropriate page creator */
