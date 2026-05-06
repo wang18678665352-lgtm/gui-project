@@ -200,8 +200,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     /* 更新状态栏 / Update status bar */
     char status[256];
-    snprintf(status, sizeof(status), "  用户: %s  |  角色: %s",
-             loggedUser.username, loggedUser.role);
+    if (strcmp(loggedUser.role, ROLE_DOCTOR) == 0) {
+        Doctor *d = find_doctor_by_username(loggedUser.username);
+        snprintf(status, sizeof(status), "  用户: %s (%s)  |  角色: %s  |  医生ID: %s",
+                 loggedUser.username, d ? d->name : "", loggedUser.role, d ? d->doctor_id : "未知");
+        if (d) free(d);
+    } else if (strcmp(loggedUser.role, ROLE_PATIENT) == 0) {
+        Patient *p = find_patient_by_username(loggedUser.username);
+        snprintf(status, sizeof(status), "  用户: %s (%s)  |  角色: %s  |  患者ID: %s",
+                 loggedUser.username, p ? p->name : "", loggedUser.role, p ? p->patient_id : "未知");
+        if (p) free(p);
+    } else {
+        snprintf(status, sizeof(status), "  用户: %s  |  角色: %s",
+                 loggedUser.username, loggedUser.role);
+    }
     SetStatusText(g_hMainWnd, status);
 
     /* Win32 标准消息循环 / Standard Win32 message loop */

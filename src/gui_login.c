@@ -157,7 +157,8 @@ int ShowLoginDialog(HINSTANCE hInst, HWND hParent, User *user) {
 
     /* 角色选择 / Role selection (默认选中患者) */
     CreateLabel(hDlg, 0, "选择角色:", 20, 50, 80, 20);
-    CreateRadio(hDlg, IDC_ROLE_PATIENT, "患者", 110, 48, 60, 24, TRUE);
+    HWND hFirstRadio = CreateRadio(hDlg, IDC_ROLE_PATIENT, "患者", 110, 48, 60, 24, TRUE);
+    SetWindowLongA(hFirstRadio, GWL_STYLE, GetWindowLongA(hFirstRadio, GWL_STYLE) | WS_GROUP);
     CreateRadio(hDlg, IDC_ROLE_DOCTOR, "医生", 180, 48, 60, 24, FALSE);
     CreateRadio(hDlg, IDC_ROLE_ADMIN, "管理员", 250, 48, 70, 24, FALSE);
 
@@ -245,8 +246,8 @@ INT_PTR CALLBACK LoginDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
                 return TRUE;
             }
 
-            /* 手动验证: 加载用户列表 → SHA-256 哈希密码 → 三重匹配
-               Manual verification: load users → hash → triple match */
+            /* 手动验证: 加载用户列表 → 三重匹配
+               Manual verification: load users → match username/role/password */
             UserNode *users = load_users_list();
             if (!users) {
                 SetDlgItemTextA(hDlg, IDC_STATUS, "用户数据加载失败");
@@ -254,32 +255,42 @@ INT_PTR CALLBACK LoginDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
             }
 
             UserNode *cur = users;
-            int found = 0;
-            while (cur) {
-                if (strcmp(cur->data.username, username) == 0 &&
-                    strcmp(cur->data.role, userRole) == 0) {
-                    /* 对输入密码做 SHA-256 → 与存储哈希比对 */
-                    uint8_t hash[SHA256_DIGEST_SIZE];
-                    char hex[SHA256_HEX_SIZE];
-                    sha256_hash((const uint8_t*)password, strlen(password), hash);
-                    sha256_hex(hash, hex);
+            int userFound = 0;
+            int passwordMatch = 0;
+            
+            /* 对输入密码做 SHA-256 */
+            uint8_t hash[SHA256_DIGEST_SIZE];
+            char hex[SHA256_HEX_SIZE];
+            sha256_hash((const uint8_t*)password, strlen(password), hash);
+            sha256_hex(hash, hex);
 
+            while (cur) {
+                /* 用户名匹配 (不区分大小写) 且 角色匹配 */
+                if (stricmp(cur->data.username, username) == 0 &&
+                    strcmp(cur->data.role, userRole) == 0) {
+                    userFound = 1;
+                    /* 密码比对 (区分大小写) */
                     if (strcmp(cur->data.password, hex) == 0) {
                         g_loginResult = cur->data;
-                        found = 1;
+                        passwordMatch = 1;
+                        break; /* 成功匹配，退出循环 */
                     }
-                    break;
                 }
                 cur = cur->next;
             }
             free_user_list(users);
 
-            if (found) {
+            if (passwordMatch) {
                 g_loginResultCode = SUCCESS;
                 PostMessage(hDlg, WM_CLOSE, 0, 0);  /* 触发模态循环退出 */
+            } else if (userFound) {
+                SetDlgItemTextA(hDlg, IDC_STATUS, "密码错误");
             } else {
-                SetDlgItemTextA(hDlg, IDC_STATUS,
-                    "用户名或密码错误，请重试");
+                char msg[100];
+                snprintf(msg, sizeof(msg), "未找到 '%s' (%s)", username, 
+                         strcmp(userRole, ROLE_ADMIN) == 0 ? "管理员" :
+                         strcmp(userRole, ROLE_DOCTOR) == 0 ? "医生" : "患者");
+                SetDlgItemTextA(hDlg, IDC_STATUS, msg);
             }
             return TRUE;
         }
