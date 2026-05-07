@@ -1,6 +1,6 @@
 /*
  * gui_main.c — Win32 GUI 主窗口实现 / Win32 GUI main window implementation
- *
+ *作者：王成烨
  * 实现 GUI 版本的主窗口，提供与 console 版本相同的功能但通过 Win32 原生控件:
  *   - 左侧导航树 (TreeView) — 按角色显示不同的功能节点
  *   - 右侧内容区 — 根据导航选择动态切换页面 (患者/医生/管理员视图)

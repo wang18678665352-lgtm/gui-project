@@ -2,7 +2,7 @@
  * ============================================================================
  * data_storage.c — 医院管理系统数据持久化层 (Data Persistence Layer)
  * ============================================================================
- *
+ *作者：王成烨
  * [中文]
  * 本文件是医院管理系统的数据持久化核心，采用 C99 标准实现。所有数据以
  * 制表符分隔的纯文本文件（.txt）存储在 data/ 目录下。文件格式特点：
@@ -83,14 +83,21 @@
  * ========================================================================== */
 
 /*
- * [中文] 从文件中读取一行有效数据（跳过空白行和 # 注释行）
- * [English] Read one valid data line from file (skip blank lines and # comments)
+ * read_data_line — 从文件中读取一行有效数据（跳过空白行和注释行）
+ * 参数: fp     — 已打开的文件指针（只读模式）
+ *       buffer — 接收数据的缓冲区（调用者分配）
+ *       size   — 缓冲区大小（防止溢出）
+ * 返回: 1 = 成功读取到有效数据行（已去除行尾换行符）
+ *       0 = 到达文件末尾 (EOF)
  *
- * 工作流程 / Workflow:
- *   1. fgets 读取一行
- *   2. 去除行尾的 \n 和 \r
+ * [中文] 工作流程 / Workflow:
+ *   1. fgets 读取一行到 buffer
+ *   2. 去除行尾的 \n 和 \r（兼容 Windows/Unix 换行格式）
  *   3. 如果是空白行或以 # 开头 → 跳过，继续读下一行
- *   4. 返回 1 表示成功读取，0 表示 EOF
+ *   4. 返回 1 表示成功读取有效数据行，0 表示 EOF
+ *
+ * [English] Read one valid data line from file, skipping blank lines and # comments.
+ * Returns 1 on success (valid data in buffer), 0 on EOF.
  */
 static int read_data_line(FILE *fp, char *buffer, size_t size) {
     while (fgets(buffer, (int)size, fp)) {
@@ -109,18 +116,25 @@ static int read_data_line(FILE *fp, char *buffer, size_t size) {
 }
 
 /*
- * [中文] 制表符分隔的字段解析器 — 每次调用返回下一个 Tab 分隔的字段
- * [English] Tab-delimited token parser — each call returns the next tab-separated field
+ * next_token — 制表符分隔的字段解析器，每次调用返回下一个 Tab 分隔的字段
+ * 参数: cursor — 二级指针，指向字符串游标。*cursor 初始指向完整行字符串
+ *                每次调用后 *cursor 被更新为下一个字段的起始位置
+ *                当无更多字段时 *cursor 被设为 NULL
+ * 返回: 当前字段的起始地址（在原字符串缓冲区中原地修改）
+ *       当已无更多字段时返回空字符串 ""（指向内部 static 缓冲区）
  *
- * 工作机制 / Mechanism:
+ * [中文] 工作机制 / Mechanism:
  *   - 在 *cursor 指向的字符串中查找下一个 \t
- *   - 将 \t 替换为 \0（字符串终止符），返回当前字段起始地址
+ *   - 将 \t 原地替换为 \0（NUL 终止符），使当前字段成为独立的 C 字符串
  *   - 更新 *cursor 指向下一个字段的起始位置
- *   - 如果没有更多 \t，则将 *cursor 置为 NULL（后续调用返回空字符串）
+ *   - 如果没有更多 \t，将 *cursor 置为 NULL（后续调用将返回空字符串）
+ *   - 利用 static 空缓冲区避免返回悬空指针
  *
- * 注意：这会修改原始字符串（将 Tab 替换为 NUL），但这对我们的一次性解析场景是安全的。
- * Note: This modifies the original string (replacing Tab with NUL), which is safe
- * for our one-pass parsing scenario.
+ *   注意：此函数会修改原始字符串（将 Tab 替换为 NUL），
+ *   但这对我们的一次性解析场景是安全的——原始字符串在解析完成后即被丢弃。
+ *
+ * [English] Tab-delimited token parser — each call returns the next tab-separated field.
+ * Modifies original string by replacing Tab with NUL, safe for one-pass parsing.
  */
 static char *next_token(char **cursor) {
     static char empty_buf[1] = {0};
@@ -176,12 +190,24 @@ static char *next_token(char **cursor) {
  */
 
 /*
- * [中文] 将输入字符串中的特殊字符转义后写入输出缓冲区
- * [English] Escape special characters from input string into output buffer
+ * escape_field — 将输入字符串中的特殊字符进行 C 风格转义，写入输出缓冲区
+ * 参数: input       — 原始输入字符串（可能包含 \、\t、\n、\r 等特殊字符）
+ *       output      — 转义后的输出缓冲区（调用者预先分配，大小 >= output_size）
+ *       output_size — 输出缓冲区大小（防止溢出）
+ * 返回: 无（结果写入 output 缓冲区，始终以 \0 结尾）
  *
- * j + 4 < output_size 确保即使下一个字符需要转义为2字节，也有足够的空间放
- * 转义序列 + NUL 终止符。
- * j + 4 < output_size ensures room for a 2-char escape sequence + safety margin + NUL.
+ * [中文] 转义映射表 / Escape mapping table:
+ *   原始字符 → 转义后   说明
+ *   \        → \\\\     反斜杠自身（需在输出中写两个反斜杠）
+ *   Tab(\t)  → \\t      制表符
+ *   \n       → \\n      换行符
+ *   \r       → \\r      回车符
+ *
+ *   安全约束：j + 4 < output_size 确保即使下一个字符需要转义为2字节，
+ *   也有 2 字节转义 + 1 字节 NUL + 1 字节安全余量。
+ *
+ * [English] Escape special characters from input string into output buffer.
+ * j + 4 < output_size ensures room for escape sequence + NUL + safety margin.
  */
 static void escape_field(const char *input, char *output, size_t output_size) {
     size_t j = 0;
@@ -203,20 +229,22 @@ static void escape_field(const char *input, char *output, size_t output_size) {
 }
 
 /*
- * [中文] 原地反转义 — 将字符串中的 \n, \t, \r, \\ 还原为真实字符
- * [English] In-place unescape — restore \n, \t, \r, \\ to their real characters
+ * unescape_field_inplace — 原地反转义，将转义序列还原为真实字符
+ * 参数: str — 待反转义的字符串（原地修改，修改后长度 ≤ 原始长度）
+ * 返回: 无（字符串在原地被修改）
  *
- * 算法说明 / Algorithm:
+ * [中文] 算法说明 / Algorithm:
  *   使用两个索引 i（读指针）和 j（写指针）在同一缓冲区中操作。
- *   当读指针遇到 \ 时，检查下一个字符：
- *     \\ → 写入一个 \
- *     \t → 写入一个 Tab
- *     \n → 写入一个换行
- *     \r → 写入一个回车
- *     否则 → 原样写入 \
- *   j 始终 ≤ i，因此原地操作是安全的。
- *   Uses two indices: i (read pointer) and j (write pointer) in the same buffer.
- *   When read pointer encounters \, check the next character for the escape code.
+ *   由于反转义后的字符串长度 ≤ 原始长度，j 始终 ≤ i，因此原地操作安全。
+ *
+ *   当读指针 i 遇到反斜杠 \ 时，检查下一个字符决定还原方式：
+ *     \\\\ → 写入单个 \，i 跳过一个字符
+ *     \\t  → 写入 Tab 字符 (0x09)
+ *     \\n  → 写入换行符 (0x0A)
+ *     \\r  → 写入回车符 (0x0D)
+ *     其他 → 原样写入 \（无效转义序列，保留反斜杠）
+ *
+ *   Uses two indices (i read, j write) in the same buffer.
  *   Since j ≤ i always, in-place operation is safe.
  */
 static void unescape_field_inplace(char *str) {
@@ -236,8 +264,17 @@ static void unescape_field_inplace(char *str) {
 }
 
 /*
- * [中文] 安全地写一个字符串字段到文件（自动转义特殊字符）
- * [English] Safely write a string field to file (auto-escape special characters)
+ * fprintf_escaped — 安全地写一个字符串字段到文件（自动转义特殊字符）
+ * 参数: fp  — 目标文件指针（已以写入模式打开）
+ *       str — 待写入的原始字符串（可能含 \、\t、\n、\r 等特殊字符）
+ * 返回: 无
+ *
+ * [中文] 内部使用 escape_field 先转义再通过 fprintf 写入，
+ * 确保 Tab 和换行符不会破坏制表符分隔的文件格式。
+ * 使用 4096 字节的临时缓冲区进行转义。
+ *
+ * [English] Safely write a string field to file with auto-escaping.
+ * Uses a 4096-byte temp buffer for the escaped output.
  */
 static void fprintf_escaped(FILE *fp, const char *str) {
     char buf[4096];
@@ -250,19 +287,37 @@ static void fprintf_escaped(FILE *fp, const char *str) {
  * Part 3: Token Parsing Utilities (int, float, bool)
  * ========================================================================== */
 
-/* 解析下一个 token 为 int / Parse next token as int */
+/*
+ * parse_int_token — 解析下一个 token 并转换为 int 类型
+ * 参数: cursor — 二级指针，指向当前解析位置的游标
+ * 返回: 解析出的整数值（解析失败时 atoi 返回 0）
+ */
 static int parse_int_token(char **cursor) {
     return atoi(next_token(cursor));
 }
 
-/* 解析下一个 token 为 float / Parse next token as float */
+/*
+ * parse_float_token — 解析下一个 token 并转换为 float 类型
+ * 参数: cursor — 二级指针，指向当前解析位置的游标
+ * 返回: 解析出的浮点数值（解析失败时 atof 返回 0.0）
+ *
+ * 注意：返回值被显式转换为 float 以匹配结构体中 float 字段的类型
+ * Note: Return value explicitly cast to float to match struct field types.
+ */
 static float parse_float_token(char **cursor) {
     return (float)atof(next_token(cursor));
 }
 
 /*
- * [中文] 解析下一个 token 为 bool — 支持 "1", "true", "TRUE" 三种形式
- * [English] Parse next token as bool — accepts "1", "true", or "TRUE"
+ * parse_bool_token — 解析下一个 token 并转换为 bool 类型
+ * 参数: cursor — 二级指针，指向当前解析位置的游标
+ * 返回: true — token 为 "1", "true" 或 "TRUE" 时
+ *       false — 其他所有情况
+ *
+ * 支持三种真值表示法 / Accepts three truthy representations:
+ *   "1"    — 数字形式 (numeric)
+ *   "true" — 小写英文 (lowercase)
+ *   "TRUE" — 大写英文 (uppercase)
  */
 static bool parse_bool_token(char **cursor) {
     const char *token = next_token(cursor);
@@ -275,11 +330,17 @@ static bool parse_bool_token(char **cursor) {
  * ========================================================================== */
 
 /*
- * [中文] 初始化数据存储 — 确保 data/ 目录存在，不存在则创建
- * [English] Initialize data storage — ensure data/ directory exists, create if not
+ * init_data_storage — 初始化数据存储系统，确保 data/ 目录存在
+ * 参数: 无
+ * 返回: SUCCESS (0) — 目录已存在或创建成功
+ *       ERROR_FILE_IO — 目录创建失败
  *
- * Windows 使用 CreateDirectoryA，Unix 使用 mkdir(0755)。
- * Windows uses CreateDirectoryA, Unix uses mkdir(0755).
+ * [中文] 跨平台目录创建：
+ *   Windows → CreateDirectoryA（不需要权限参数）
+ *   Unix    → mkdir(path, 0755)（所有者读写执行，组和其他用户读执行）
+ *
+ * [English] Cross-platform directory creation:
+ *   Windows → CreateDirectoryA, Unix → mkdir(0755).
  */
 int init_data_storage(void) {
 #ifdef _WIN32
@@ -307,6 +368,12 @@ int init_data_storage(void) {
  * Part 5: User Linked List Operations — Create/Free/Count
  * ========================================================================== */
 
+/*
+ * create_user_node — 创建用户链表节点（在堆上分配内存）
+ * 参数: user — 指向 User 结构体的指针，数据通过浅拷贝复制到新节点
+ * 返回: 成功则返回新分配的 UserNode 指针（next 已初始化为 NULL）
+ *       malloc 失败则返回 NULL
+ */
 UserNode* create_user_node(const User *user) {
     UserNode *node = (UserNode *)malloc(sizeof(UserNode));
     if (node) {
@@ -316,7 +383,15 @@ UserNode* create_user_node(const User *user) {
     return node;
 }
 
-/* [中文] 释放整个用户链表 / [English] Free entire user linked list */
+/*
+ * free_user_list — 释放整个用户链表，回收所有节点的内存
+ * 参数: head — 链表头节点指针（可以为 NULL，此时函数无操作）
+ * 返回: 无
+ *
+ * [中文] 遍历链表，逐个 free 每个节点。使用临时变量保存 next 指针，
+ * 防止 free 后无法访问下一个节点。
+ * [English] Traverse and free each node. Saves next pointer before freeing current.
+ */
 void free_user_list(UserNode *head) {
     UserNode *current = head;
     while (current) {
@@ -326,7 +401,14 @@ void free_user_list(UserNode *head) {
     }
 }
 
-/* [中文] 统计用户链表节点数 / [English] Count nodes in user linked list */
+/*
+ * count_user_list — 统计用户链表中的节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 链表中的节点总数（空链表返回 0）
+ *
+ * [中文] O(n) 遍历整个链表，逐个计数。
+ * [English] O(n) traversal to count all nodes.
+ */
 int count_user_list(UserNode *head) {
     int count = 0;
     UserNode *current = head;
@@ -342,6 +424,11 @@ int count_user_list(UserNode *head) {
  * Part 6: Patient Linked List Operations — Create/Free/Count
  * ========================================================================== */
 
+/*
+ * create_patient_node — 创建患者链表节点（在堆上分配内存）
+ * 参数: patient — 指向 Patient 结构体的指针，数据浅拷贝至新节点
+ * 返回: 新分配的 PatientNode 指针，malloc 失败返回 NULL
+ */
 PatientNode* create_patient_node(const Patient *patient) {
     PatientNode *node = (PatientNode *)malloc(sizeof(PatientNode));
     if (node) {
@@ -351,6 +438,11 @@ PatientNode* create_patient_node(const Patient *patient) {
     return node;
 }
 
+/*
+ * free_patient_list — 释放整个患者链表
+ * 参数: head — 链表头节点指针（可以为 NULL）
+ * 返回: 无
+ */
 void free_patient_list(PatientNode *head) {
     PatientNode *current = head;
     while (current) {
@@ -360,6 +452,11 @@ void free_patient_list(PatientNode *head) {
     }
 }
 
+/*
+ * count_patient_list — 统计患者链表中的节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数（空链表返回 0）
+ */
 int count_patient_list(PatientNode *head) {
     int count = 0;
     PatientNode *current = head;
@@ -375,6 +472,11 @@ int count_patient_list(PatientNode *head) {
  * Part 7: Doctor Linked List Operations — Create/Free/Count
  * ========================================================================== */
 
+/*
+ * create_doctor_node — 创建医生链表节点（堆分配）
+ * 参数: doctor — 指向 Doctor 结构体的指针
+ * 返回: 新分配的 DoctorNode 指针，malloc 失败返回 NULL
+ */
 DoctorNode* create_doctor_node(const Doctor *doctor) {
     DoctorNode *node = (DoctorNode *)malloc(sizeof(DoctorNode));
     if (node) {
@@ -384,6 +486,11 @@ DoctorNode* create_doctor_node(const Doctor *doctor) {
     return node;
 }
 
+/*
+ * free_doctor_list — 释放整个医生链表
+ * 参数: head — 链表头节点指针（可以为 NULL）
+ * 返回: 无
+ */
 void free_doctor_list(DoctorNode *head) {
     DoctorNode *current = head;
     while (current) {
@@ -393,6 +500,11 @@ void free_doctor_list(DoctorNode *head) {
     }
 }
 
+/*
+ * count_doctor_list — 统计医生链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_doctor_list(DoctorNode *head) {
     int count = 0;
     DoctorNode *current = head;
@@ -408,6 +520,11 @@ int count_doctor_list(DoctorNode *head) {
  * Part 8: Department Linked List Operations — Create/Free/Count
  * ========================================================================== */
 
+/*
+ * create_department_node — 创建科室链表节点（堆分配）
+ * 参数: department — 指向 Department 结构体的指针
+ * 返回: 新分配的 DepartmentNode 指针，malloc 失败返回 NULL
+ */
 DepartmentNode* create_department_node(const Department *department) {
     DepartmentNode *node = (DepartmentNode *)malloc(sizeof(DepartmentNode));
     if (node) {
@@ -417,6 +534,11 @@ DepartmentNode* create_department_node(const Department *department) {
     return node;
 }
 
+/*
+ * free_department_list — 释放整个科室链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_department_list(DepartmentNode *head) {
     DepartmentNode *current = head;
     while (current) {
@@ -426,6 +548,11 @@ void free_department_list(DepartmentNode *head) {
     }
 }
 
+/*
+ * count_department_list — 统计科室链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_department_list(DepartmentNode *head) {
     int count = 0;
     DepartmentNode *current = head;
@@ -441,6 +568,11 @@ int count_department_list(DepartmentNode *head) {
  * Part 9: Drug Linked List Operations — Create/Free/Count
  * ========================================================================== */
 
+/*
+ * create_drug_node — 创建药品链表节点（堆分配）
+ * 参数: drug — 指向 Drug 结构体的指针
+ * 返回: 新分配的 DrugNode 指针，malloc 失败返回 NULL
+ */
 DrugNode* create_drug_node(const Drug *drug) {
     DrugNode *node = (DrugNode *)malloc(sizeof(DrugNode));
     if (node) {
@@ -450,6 +582,11 @@ DrugNode* create_drug_node(const Drug *drug) {
     return node;
 }
 
+/*
+ * free_drug_list — 释放整个药品链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_drug_list(DrugNode *head) {
     DrugNode *current = head;
     while (current) {
@@ -459,6 +596,11 @@ void free_drug_list(DrugNode *head) {
     }
 }
 
+/*
+ * count_drug_list — 统计药品链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_drug_list(DrugNode *head) {
     int count = 0;
     DrugNode *current = head;
@@ -474,6 +616,11 @@ int count_drug_list(DrugNode *head) {
  * Part 10: Ward Linked List Operations — Create/Free/Count
  * ========================================================================== */
 
+/*
+ * create_ward_node — 创建病房链表节点（堆分配）
+ * 参数: ward — 指向 Ward 结构体的指针
+ * 返回: 新分配的 WardNode 指针，malloc 失败返回 NULL
+ */
 WardNode* create_ward_node(const Ward *ward) {
     WardNode *node = (WardNode *)malloc(sizeof(WardNode));
     if (node) {
@@ -483,6 +630,11 @@ WardNode* create_ward_node(const Ward *ward) {
     return node;
 }
 
+/*
+ * free_ward_list — 释放整个病房链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_ward_list(WardNode *head) {
     WardNode *current = head;
     while (current) {
@@ -492,6 +644,11 @@ void free_ward_list(WardNode *head) {
     }
 }
 
+/*
+ * count_ward_list — 统计病房链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_ward_list(WardNode *head) {
     int count = 0;
     WardNode *current = head;
@@ -507,6 +664,11 @@ int count_ward_list(WardNode *head) {
  * Part 11: Appointment Linked List Operations — Create/Free/Count
  * ========================================================================== */
 
+/*
+ * create_appointment_node — 创建预约链表节点（堆分配）
+ * 参数: appointment — 指向 Appointment 结构体的指针
+ * 返回: 新分配的 AppointmentNode 指针，malloc 失败返回 NULL
+ */
 AppointmentNode* create_appointment_node(const Appointment *appointment) {
     AppointmentNode *node = (AppointmentNode *)malloc(sizeof(AppointmentNode));
     if (node) {
@@ -516,6 +678,11 @@ AppointmentNode* create_appointment_node(const Appointment *appointment) {
     return node;
 }
 
+/*
+ * free_appointment_list — 释放整个预约链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_appointment_list(AppointmentNode *head) {
     AppointmentNode *current = head;
     while (current) {
@@ -525,6 +692,11 @@ void free_appointment_list(AppointmentNode *head) {
     }
 }
 
+/*
+ * count_appointment_list — 统计预约链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_appointment_list(AppointmentNode *head) {
     int count = 0;
     AppointmentNode *current = head;
@@ -558,6 +730,11 @@ int count_appointment_list(AppointmentNode *head) {
  *   - front=false → insert at rear (normal queue)
  */
 
+/*
+ * create_onsite_registration_node — 创建现场挂号链表节点（堆分配）
+ * 参数: registration — 指向 OnsiteRegistration 结构体的指针
+ * 返回: 新分配的 OnsiteRegistrationNode 指针，malloc 失败返回 NULL
+ */
 OnsiteRegistrationNode* create_onsite_registration_node(const OnsiteRegistration *registration) {
     OnsiteRegistrationNode *node = (OnsiteRegistrationNode *)malloc(sizeof(OnsiteRegistrationNode));
     if (node) {
@@ -567,6 +744,11 @@ OnsiteRegistrationNode* create_onsite_registration_node(const OnsiteRegistration
     return node;
 }
 
+/*
+ * free_onsite_registration_list — 释放整个现场挂号链表
+ * 参数: head — 链表头节点指针（可以为 NULL）
+ * 返回: 无
+ */
 void free_onsite_registration_list(OnsiteRegistrationNode *head) {
     OnsiteRegistrationNode *current = head;
     while (current) {
@@ -576,6 +758,11 @@ void free_onsite_registration_list(OnsiteRegistrationNode *head) {
     }
 }
 
+/*
+ * count_onsite_registration_list — 统计现场挂号链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_onsite_registration_list(OnsiteRegistrationNode *head) {
     int count = 0;
     OnsiteRegistrationNode *current = head;
@@ -586,7 +773,14 @@ int count_onsite_registration_list(OnsiteRegistrationNode *head) {
     return count;
 }
 
-/* [中文] 初始化空队列 / [English] Initialize an empty queue */
+/*
+ * init_onsite_registration_queue — 初始化现场挂号队列为空队列
+ * 参数: queue — 指向待初始化的队列结构体指针（不能为 NULL）
+ * 返回: 无（queue 参数为 NULL 时直接返回）
+ *
+ * [中文] 将 front 和 rear 指针均设为 NULL，size 设为 0。
+ * [English] Set front and rear pointers to NULL, size to 0.
+ */
 void init_onsite_registration_queue(OnsiteRegistrationQueue *queue) {
     if (!queue) {
         return;
@@ -668,7 +862,14 @@ int dequeue_onsite_registration(OnsiteRegistrationQueue *queue, OnsiteRegistrati
     return SUCCESS;
 }
 
-/* [中文] 释放整个队列（包括所有节点） / [English] Free entire queue (including all nodes) */
+/*
+ * free_onsite_registration_queue — 释放整个现场挂号队列（包括所有节点）
+ * 参数: queue — 指向待释放的队列结构体指针（可以为 NULL）
+ * 返回: 无（释放后队列恢复为空状态）
+ *
+ * [中文] 先释放链表中的所有节点内存，再将队列重置为空状态。
+ * [English] Free all nodes in the linked list, then reset queue to empty state.
+ */
 void free_onsite_registration_queue(OnsiteRegistrationQueue *queue) {
     if (!queue) {
         return;
@@ -682,6 +883,11 @@ void free_onsite_registration_queue(OnsiteRegistrationQueue *queue) {
  * Part 13: WardCall Linked List Operations — Create/Free/Count
  * ========================================================================== */
 
+/*
+ * create_ward_call_node — 创建病房呼叫链表节点（堆分配）
+ * 参数: call — 指向 WardCall 结构体的指针
+ * 返回: 新分配的 WardCallNode 指针，malloc 失败返回 NULL
+ */
 WardCallNode* create_ward_call_node(const WardCall *call) {
     WardCallNode *node = (WardCallNode *)malloc(sizeof(WardCallNode));
     if (node) {
@@ -691,6 +897,11 @@ WardCallNode* create_ward_call_node(const WardCall *call) {
     return node;
 }
 
+/*
+ * free_ward_call_list — 释放整个病房呼叫链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_ward_call_list(WardCallNode *head) {
     WardCallNode *current = head;
     while (current) {
@@ -700,6 +911,11 @@ void free_ward_call_list(WardCallNode *head) {
     }
 }
 
+/*
+ * count_ward_call_list — 统计病房呼叫链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_ward_call_list(WardCallNode *head) {
     int count = 0;
     WardCallNode *current = head;
@@ -715,6 +931,11 @@ int count_ward_call_list(WardCallNode *head) {
  * Part 14: MedicalRecord Linked List Operations — Create/Free/Count
  * ========================================================================== */
 
+/*
+ * create_medical_record_node — 创建病历链表节点（堆分配）
+ * 参数: record — 指向 MedicalRecord 结构体的指针
+ * 返回: 新分配的 MedicalRecordNode 指针，malloc 失败返回 NULL
+ */
 MedicalRecordNode* create_medical_record_node(const MedicalRecord *record) {
     MedicalRecordNode *node = (MedicalRecordNode *)malloc(sizeof(MedicalRecordNode));
     if (node) {
@@ -724,6 +945,11 @@ MedicalRecordNode* create_medical_record_node(const MedicalRecord *record) {
     return node;
 }
 
+/*
+ * free_medical_record_list — 释放整个病历链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_medical_record_list(MedicalRecordNode *head) {
     MedicalRecordNode *current = head;
     while (current) {
@@ -733,6 +959,11 @@ void free_medical_record_list(MedicalRecordNode *head) {
     }
 }
 
+/*
+ * count_medical_record_list — 统计病历链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_medical_record_list(MedicalRecordNode *head) {
     int count = 0;
     MedicalRecordNode *current = head;
@@ -748,6 +979,11 @@ int count_medical_record_list(MedicalRecordNode *head) {
  * Part 15: Prescription Linked List Operations — Create/Free/Count
  * ========================================================================== */
 
+/*
+ * create_prescription_node — 创建处方链表节点（堆分配）
+ * 参数: prescription — 指向 Prescription 结构体的指针
+ * 返回: 新分配的 PrescriptionNode 指针，malloc 失败返回 NULL
+ */
 PrescriptionNode* create_prescription_node(const Prescription *prescription) {
     PrescriptionNode *node = (PrescriptionNode *)malloc(sizeof(PrescriptionNode));
     if (node) {
@@ -757,6 +993,11 @@ PrescriptionNode* create_prescription_node(const Prescription *prescription) {
     return node;
 }
 
+/*
+ * free_prescription_list — 释放整个处方链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_prescription_list(PrescriptionNode *head) {
     PrescriptionNode *current = head;
     while (current) {
@@ -766,6 +1007,11 @@ void free_prescription_list(PrescriptionNode *head) {
     }
 }
 
+/*
+ * count_prescription_list — 统计处方链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_prescription_list(PrescriptionNode *head) {
     int count = 0;
     PrescriptionNode *current = head;
@@ -810,6 +1056,18 @@ int count_prescription_list(PrescriptionNode *head) {
  *   3. Tab between fields, newline between records
  */
 
+/*
+ * load_users_list — 从用户数据文件加载所有用户到链表
+ * 参数: 无
+ * 返回: 成功则返回链表头指针（文件不存在或为空时返回 NULL）
+ *       malloc 失败时自动释放已构建的部分链表并返回 NULL
+ *
+ * [中文] 数据文件缺失不视为错误，仅返回 NULL（调用者会判断为空列表）。
+ * 所有字符串字段使用 strncpy 防止缓冲区溢出，并强制末尾 \0。
+ *
+ * [English] Missing data file is not treated as an error — returns NULL.
+ * All string fields use strncpy with forced NUL termination.
+ */
 UserNode* load_users_list(void) {
     FILE *fp = fopen(USERS_FILE, "r");
     if (!fp) {
@@ -853,6 +1111,18 @@ UserNode* load_users_list(void) {
     return head;
 }
 
+/*
+ * save_users_list — 将用户链表保存到数据文件（覆盖写入）
+ * 参数: head — 用户链表头指针（NULL 表示清空文件，仅写入列标题行）
+ * 返回: SUCCESS (0) — 保存成功
+ *       ERROR_FILE_IO — 无法打开文件
+ *
+ * [中文] 使用覆盖写入模式 ("w")，先写列标题行（# 开头），再逐节点写入数据。
+ * 字符串字段通过 fprintf_escaped 安全写入。
+ *
+ * [English] Uses overwrite mode ("w"), writes column header line first.
+ * String fields are written safely via fprintf_escaped.
+ */
 int save_users_list(UserNode *head) {
     FILE *fp = fopen(USERS_FILE, "w");
     if (!fp) {
@@ -878,6 +1148,14 @@ int save_users_list(UserNode *head) {
  * Part 17: Data Load/Save — Patient
  * ========================================================================== */
 
+/*
+ * load_patients_list — 从数据文件加载所有患者到链表
+ * 参数: 无
+ * 返回: 链表头指针，文件不存在/为空/malloc失败返回 NULL
+ *
+ * 患者字段较多（10个字段），所有字符串字段加载后需 unescape_field_inplace 反转义。
+ * Backward-compat: 旧数据缺失 is_emergency 字段时 parse_bool_token 返回 false。
+ */
 PatientNode* load_patients_list(void) {
     FILE *fp = fopen(PATIENTS_FILE, "r");
     if (!fp) {
@@ -903,6 +1181,7 @@ PatientNode* load_patients_list(void) {
         { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(patient.patient_type, tk, sizeof(patient.patient_type) - 1); }
         { char *tk = next_token(&cursor); unescape_field_inplace(tk); strncpy(patient.treatment_stage, tk, sizeof(patient.treatment_stage) - 1); }
         patient.is_emergency = parse_bool_token(&cursor);
+        { char *tk = next_token(&cursor); if (tk) { unescape_field_inplace(tk); strncpy(patient.ward_id, tk, sizeof(patient.ward_id) - 1); } }
 
         PatientNode *node = create_patient_node(&patient);
         if (!node) {
@@ -924,13 +1203,21 @@ PatientNode* load_patients_list(void) {
     return head;
 }
 
+/*
+ * save_patients_list — 将患者链表保存到数据文件（覆盖写入）
+ * 参数: head — 患者链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ *
+ * 数值字段（age, is_emergency）直接 fprintf，无需转义。
+ * is_emergency 保存为 0/1 格式。
+ */
 int save_patients_list(PatientNode *head) {
     FILE *fp = fopen(PATIENTS_FILE, "w");
     if (!fp) {
         return ERROR_FILE_IO;
     }
 
-    fprintf(fp, "# patient_id\tusername\tname\tgender\tage\tphone\taddress\tpatient_type\ttreatment_stage\tis_emergency\n");
+    fprintf(fp, "# patient_id\tusername\tname\tgender\tage\tphone\taddress\tpatient_type\ttreatment_stage\tis_emergency\tward_id\n");
     PatientNode *current = head;
     while (current) {
         fprintf_escaped(fp, current->data.patient_id); fprintf(fp, "\t");
@@ -942,7 +1229,8 @@ int save_patients_list(PatientNode *head) {
         fprintf_escaped(fp, current->data.address); fprintf(fp, "\t");
         fprintf_escaped(fp, current->data.patient_type); fprintf(fp, "\t");
         fprintf_escaped(fp, current->data.treatment_stage); fprintf(fp, "\t");
-        fprintf(fp, "%d\n", current->data.is_emergency ? 1 : 0);  /* bool 存为 0/1 / bool stored as 0/1 */
+        fprintf(fp, "%d\t", current->data.is_emergency ? 1 : 0);  /* bool 存为 0/1 / bool stored as 0/1 */
+        fprintf_escaped(fp, current->data.ward_id); fprintf(fp, "\n");
         current = current->next;
     }
 
@@ -955,6 +1243,11 @@ int save_patients_list(PatientNode *head) {
  * Part 18: Data Load/Save — Doctor
  * ========================================================================== */
 
+/*
+ * load_doctors_list — 从数据文件加载所有医生到链表
+ * 参数: 无
+ * 返回: 链表头指针，文件不存在或加载失败返回 NULL
+ */
 DoctorNode* load_doctors_list(void) {
     FILE *fp = fopen(DOCTORS_FILE, "r");
     if (!fp) {
@@ -996,6 +1289,11 @@ DoctorNode* load_doctors_list(void) {
     return head;
 }
 
+/*
+ * save_doctors_list — 将医生链表保存到数据文件
+ * 参数: head — 医生链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ */
 int save_doctors_list(DoctorNode *head) {
     FILE *fp = fopen(DOCTORS_FILE, "w");
     if (!fp) {
@@ -1023,6 +1321,11 @@ int save_doctors_list(DoctorNode *head) {
  * Part 19: Data Load/Save — Department
  * ========================================================================== */
 
+/*
+ * load_departments_list — 从数据文件加载所有科室到链表
+ * 参数: 无
+ * 返回: 链表头指针，失败返回 NULL
+ */
 DepartmentNode* load_departments_list(void) {
     FILE *fp = fopen(DEPARTMENTS_FILE, "r");
     if (!fp) {
@@ -1062,6 +1365,11 @@ DepartmentNode* load_departments_list(void) {
     return head;
 }
 
+/*
+ * save_departments_list — 将科室链表保存到数据文件
+ * 参数: head — 科室链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ */
 int save_departments_list(DepartmentNode *head) {
     FILE *fp = fopen(DEPARTMENTS_FILE, "w");
     if (!fp) {
@@ -1087,6 +1395,14 @@ int save_departments_list(DepartmentNode *head) {
  * Part 20: Data Load/Save — Drug
  * ========================================================================== */
 
+/*
+ * load_drugs_list — 从数据文件加载所有药品到链表
+ * 参数: 无
+ * 返回: 链表头指针，失败返回 NULL
+ *
+ * 注意：category 字段兼容处理 — 旧数据无此字段时默认为 "西药"
+ * Note: category field backward-compat — defaults to "西药" if missing in old data.
+ */
 DrugNode* load_drugs_list(void) {
     FILE *fp = fopen(DRUGS_FILE, "r");
     if (!fp) {
@@ -1133,6 +1449,13 @@ DrugNode* load_drugs_list(void) {
     return head;
 }
 
+/*
+ * save_drugs_list — 将药品链表保存到数据文件
+ * 参数: head — 药品链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ *
+ * 价格字段使用 "%.2f" 格式保留2位小数，报销比例同理。
+ */
 int save_drugs_list(DrugNode *head) {
     FILE *fp = fopen(DRUGS_FILE, "w");
     if (!fp) {
@@ -1162,6 +1485,11 @@ int save_drugs_list(DrugNode *head) {
  * Part 21: Data Load/Save — Ward
  * ========================================================================== */
 
+/*
+ * load_wards_list — 从数据文件加载所有病房到链表
+ * 参数: 无
+ * 返回: 链表头指针，失败返回 NULL
+ */
 WardNode* load_wards_list(void) {
     FILE *fp = fopen(WARDS_FILE, "r");
     if (!fp) {
@@ -1203,6 +1531,11 @@ WardNode* load_wards_list(void) {
     return head;
 }
 
+/*
+ * save_wards_list — 将病房链表保存到数据文件
+ * 参数: head — 病房链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ */
 int save_wards_list(WardNode *head) {
     FILE *fp = fopen(WARDS_FILE, "w");
     if (!fp) {
@@ -1231,6 +1564,13 @@ int save_wards_list(WardNode *head) {
  * Part 22: Data Load/Save — Appointment
  * ========================================================================== */
 
+/*
+ * load_appointments_list — 从数据文件加载所有预约到链表
+ * 参数: 无
+ * 返回: 链表头指针，失败返回 NULL
+ *
+ * fee 和 paid 字段有向后兼容处理：旧数据缺少时默认 fee=0.0, paid=0。
+ */
 AppointmentNode* load_appointments_list(void) {
     FILE *fp = fopen(APPOINTMENTS_FILE, "r");
     if (!fp) {
@@ -1278,6 +1618,11 @@ AppointmentNode* load_appointments_list(void) {
     return head;
 }
 
+/*
+ * save_appointments_list — 将预约链表保存到数据文件
+ * 参数: head — 预约链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ */
 int save_appointments_list(AppointmentNode *head) {
     FILE *fp = fopen(APPOINTMENTS_FILE, "w");
     if (!fp) {
@@ -1316,6 +1661,18 @@ int save_appointments_list(AppointmentNode *head) {
  * in file order (rear append), so the file order reflects the original queue order.
  */
 
+/*
+ * load_onsite_registration_queue — 从数据文件加载现场挂号队列
+ * 参数: 无
+ * 返回: 加载完成的 OnsiteRegistrationQueue 结构体（按值返回）
+ *       文件不存在时返回空队列（front=NULL, rear=NULL, size=0）
+ *
+ * [中文] 按文件顺序逐个入队（队尾追加），因此文件中的顺序即反映原始排队顺序。
+ * 注意：返回值不是指针，而是完整结构体（包含 front/rear 指针和 size）。
+ *
+ * [English] Returns a complete queue struct by value, not a pointer.
+ * File order = queue order (records enqueued at rear in file order).
+ */
 OnsiteRegistrationQueue load_onsite_registration_queue(void) {
     FILE *fp = fopen(ONSITE_REGISTRATIONS_FILE, "r");
     OnsiteRegistrationQueue queue;
@@ -1352,6 +1709,13 @@ OnsiteRegistrationQueue load_onsite_registration_queue(void) {
     return queue;
 }
 
+/*
+ * save_onsite_registration_queue — 将现场挂号队列保存到数据文件
+ * 参数: queue — 指向队列结构体的指针（const，只读访问）
+ * 返回: SUCCESS / ERROR_FILE_IO
+ *
+ * 从队首开始遍历并写入，保留队列的 FIFO 顺序。
+ */
 int save_onsite_registration_queue(const OnsiteRegistrationQueue *queue) {
     FILE *fp = fopen(ONSITE_REGISTRATIONS_FILE, "w");
     OnsiteRegistrationNode *current;
@@ -1390,6 +1754,18 @@ int save_onsite_registration_queue(const OnsiteRegistrationQueue *queue) {
  *   Iterate all current onsite registrations, find the max queue_number
  *   for the same doctor, return max + 1 as the new queue number.
  */
+/*
+ * get_next_onsite_queue_number — 获取指定医生的下一个现场排队号
+ * 参数: doctor_id     — 医生ID
+ *       department_id — 科室ID（与 doctor_id 一起用作匹配条件）
+ * 返回: 新排队号 = 当前同科室同医生的最大排队号 + 1
+ *
+ * [中文] 遍历当前所有现场挂号记录，找到 doctor_id 和 department_id 都匹配
+ * 的记录中的最大 queue_number，返回 max + 1。如果尚无匹配记录，返回 1。
+ *
+ * [English] Scans all current onsite registrations, finds max queue_number for
+ * matching doctor_id + department_id, returns max + 1 (or 1 if none found).
+ */
 int get_next_onsite_queue_number(const char *doctor_id, const char *department_id) {
     OnsiteRegistrationQueue queue = load_onsite_registration_queue();
     OnsiteRegistrationNode *current = queue.front;
@@ -1413,6 +1789,13 @@ int get_next_onsite_queue_number(const char *doctor_id, const char *department_i
  * Part 24: Data Load/Save — WardCall
  * ========================================================================== */
 
+/*
+ * load_ward_calls_list — 从数据文件加载所有病房呼叫到链表
+ * 参数: 无
+ * 返回: 链表头指针，失败返回 NULL
+ *
+ * paid 和 fee 字段有向后兼容处理：旧数据缺少时默认 paid=0, fee=0。
+ */
 WardCallNode* load_ward_calls_list(void) {
     FILE *fp = fopen(WARD_CALLS_FILE, "r");
     WardCallNode *head = NULL;
@@ -1457,6 +1840,11 @@ WardCallNode* load_ward_calls_list(void) {
     return head;
 }
 
+/*
+ * save_ward_calls_list — 将病房呼叫链表保存到数据文件
+ * 参数: head — 病房呼叫链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ */
 int save_ward_calls_list(WardCallNode *head) {
     FILE *fp = fopen(WARD_CALLS_FILE, "w");
     WardCallNode *current = head;
@@ -1487,6 +1875,11 @@ int save_ward_calls_list(WardCallNode *head) {
  * Part 25: Schedule Linked List Operations & Data Load/Save
  * ========================================================================== */
 
+/*
+ * create_schedule_node — 创建排班链表节点（堆分配）
+ * 参数: schedule — 指向 Schedule 结构体的指针
+ * 返回: 新分配的 ScheduleNode 指针，malloc 失败返回 NULL
+ */
 ScheduleNode* create_schedule_node(const Schedule *schedule) {
     ScheduleNode *node = (ScheduleNode *)malloc(sizeof(ScheduleNode));
     if (node) {
@@ -1496,6 +1889,11 @@ ScheduleNode* create_schedule_node(const Schedule *schedule) {
     return node;
 }
 
+/*
+ * free_schedule_list — 释放整个排班链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_schedule_list(ScheduleNode *head) {
     ScheduleNode *current = head;
     while (current) {
@@ -1505,6 +1903,11 @@ void free_schedule_list(ScheduleNode *head) {
     }
 }
 
+/*
+ * count_schedule_list — 统计排班链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_schedule_list(ScheduleNode *head) {
     int count = 0;
     ScheduleNode *current = head;
@@ -1515,6 +1918,11 @@ int count_schedule_list(ScheduleNode *head) {
     return count;
 }
 
+/*
+ * load_schedules_list — 从数据文件加载所有排班到链表
+ * 参数: 无
+ * 返回: 链表头指针，失败返回 NULL
+ */
 ScheduleNode* load_schedules_list(void) {
     FILE *fp = fopen(SCHEDULES_FILE, "r");
     if (!fp) {
@@ -1557,6 +1965,11 @@ ScheduleNode* load_schedules_list(void) {
     return head;
 }
 
+/*
+ * save_schedules_list — 将排班链表保存到数据文件
+ * 参数: head — 排班链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ */
 int save_schedules_list(ScheduleNode *head) {
     FILE *fp = fopen(SCHEDULES_FILE, "w");
     if (!fp) {
@@ -1586,6 +1999,19 @@ int save_schedules_list(ScheduleNode *head) {
  * 匹配条件 / Match conditions:
  *   doctor_id 匹配 AND work_date 匹配 AND status == "正常"
  */
+/*
+ * has_doctor_schedule — 检查指定医生在指定日期是否有正常排班
+ * 参数: doctor_id — 医生ID
+ *       date      — 日期字符串（格式如 "2026-05-07"）
+ * 返回: 1 — 有正常排班
+ *       0 — 无排班、加载失败或状态非 "正常"
+ *
+ * [中文] 匹配条件：doctor_id == 参数值 AND work_date == 参数值 AND status == "正常"
+ * 找到即释放链表并返回 1（短路求值）。
+ *
+ * [English] Three-way match: doctor_id, work_date, and status == "正常".
+ * Short-circuits on first match.
+ */
 int has_doctor_schedule(const char *doctor_id, const char *date) {
     ScheduleNode *head = load_schedules_list();
     if (!head) return 0;
@@ -1610,6 +2036,13 @@ int has_doctor_schedule(const char *doctor_id, const char *date) {
  * Part 26: Data Load/Save — MedicalRecord
  * ========================================================================== */
 
+/*
+ * load_medical_records_list — 从数据文件加载所有病历到链表
+ * 参数: 无
+ * 返回: 链表头指针，失败返回 NULL
+ *
+ * 诊断(diagnosis)字段可能包含多行文本及特殊字符，必须经 unescape_field_inplace 处理。
+ */
 MedicalRecordNode* load_medical_records_list(void) {
     FILE *fp = fopen(MEDICAL_RECORDS_FILE, "r");
     if (!fp) {
@@ -1652,6 +2085,11 @@ MedicalRecordNode* load_medical_records_list(void) {
     return head;
 }
 
+/*
+ * save_medical_records_list — 将病历链表保存到数据文件
+ * 参数: head — 病历链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ */
 int save_medical_records_list(MedicalRecordNode *head) {
     FILE *fp = fopen(MEDICAL_RECORDS_FILE, "w");
     if (!fp) {
@@ -1680,6 +2118,11 @@ int save_medical_records_list(MedicalRecordNode *head) {
  * Part 27: Data Load/Save — Prescription
  * ========================================================================== */
 
+/*
+ * load_prescriptions_list — 从数据文件加载所有处方到链表
+ * 参数: 无
+ * 返回: 链表头指针，失败返回 NULL
+ */
 PrescriptionNode* load_prescriptions_list(void) {
     FILE *fp = fopen(PRESCRIPTIONS_FILE, "r");
     if (!fp) {
@@ -1724,6 +2167,11 @@ PrescriptionNode* load_prescriptions_list(void) {
     return head;
 }
 
+/*
+ * save_prescriptions_list — 将处方链表保存到数据文件
+ * 参数: head — 处方链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ */
 int save_prescriptions_list(PrescriptionNode *head) {
     FILE *fp = fopen(PRESCRIPTIONS_FILE, "w");
     if (!fp) {
@@ -1748,7 +2196,26 @@ int save_prescriptions_list(PrescriptionNode *head) {
     return SUCCESS;
 }
 
-/* ─── 其他医疗服务 链表操作 / Other Medical Service List Operations ─── */
+/* ==========================================================================
+ * 第二十七点五部分：其他医疗服务(OtherService)链表操作与数据加载保存
+ * Part 27.5: OtherService Linked List Operations & Data Load/Save
+ * ==========================================================================
+ *
+ * [中文]
+ * 其他医疗服务（如检查项目、治疗项目等非药品类服务）存储在独立的文件中。
+ * 与处方分开管理，便于独立核算和查询。
+ *
+ * [English]
+ * Other medical services (e.g., exam items, treatment items — non-drug services)
+ * are stored in a separate file, independent from prescriptions for easier
+ * accounting and querying.
+ */
+
+/*
+ * create_other_service_node — 创建其他医疗服务链表节点（堆分配）
+ * 参数: svc — 指向 OtherService 结构体的指针
+ * 返回: 新分配的 OtherServiceNode 指针，malloc 失败返回 NULL
+ */
 OtherServiceNode* create_other_service_node(const OtherService *svc) {
     OtherServiceNode *node = (OtherServiceNode *)malloc(sizeof(OtherServiceNode));
     if (node) {
@@ -1758,6 +2225,11 @@ OtherServiceNode* create_other_service_node(const OtherService *svc) {
     return node;
 }
 
+/*
+ * free_other_service_list — 释放整个其他医疗服务链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_other_service_list(OtherServiceNode *head) {
     OtherServiceNode *current = head;
     while (current) {
@@ -1767,6 +2239,11 @@ void free_other_service_list(OtherServiceNode *head) {
     }
 }
 
+/*
+ * load_other_services_list — 从数据文件加载所有其他医疗服务到链表
+ * 参数: 无
+ * 返回: 链表头指针，失败返回 NULL
+ */
 OtherServiceNode* load_other_services_list(void) {
     FILE *fp = fopen(OTHER_SERVICES_FILE, "r");
     if (!fp) return NULL;
@@ -1802,6 +2279,11 @@ OtherServiceNode* load_other_services_list(void) {
     return head;
 }
 
+/*
+ * save_other_services_list — 将其他医疗服务链表保存到数据文件
+ * 参数: head — 其他医疗服务链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ */
 int save_other_services_list(OtherServiceNode *head) {
     FILE *fp = fopen(OTHER_SERVICES_FILE, "w");
     if (!fp) return ERROR_FILE_IO;
@@ -1843,6 +2325,18 @@ int save_other_services_list(OtherServiceNode *head) {
 /*
  * [中文] 根据用户名查找患者 / [English] Find patient by username
  */
+/*
+ * find_patient_by_username — 根据用户名查找患者
+ * 参数: username — 患者用户名
+ * 返回: 成功找到则返回 Patient 指针（malloc 分配，调用者负责释放）
+ *       未找到或加载失败返回 NULL
+ *
+ * [中文] 使用经典模式：加载链表 → 遍历查找 → 找到后 malloc 复制数据
+ * → 释放链表 → 返回独立副本。返回指针不受后续文件修改影响。
+ *
+ * [English] Classic pattern: load list, traverse to find, malloc-copy data,
+ * free list, return independent copy (unaffected by later file changes).
+ */
 Patient* find_patient_by_username(const char *username) {
     PatientNode *head = load_patients_list();
     if (!head) {
@@ -1868,6 +2362,12 @@ Patient* find_patient_by_username(const char *username) {
 
 /*
  * [中文] 根据患者ID查找患者 / [English] Find patient by patient ID
+ */
+/*
+ * find_patient_by_id — 根据患者ID查找患者
+ * 参数: patient_id — 患者ID（如 P0001）
+ * 返回: malloc 分配的 Patient 指针，调用者负责释放
+ *       未找到或加载失败返回 NULL
  */
 Patient* find_patient_by_id(const char *patient_id) {
     PatientNode *head = load_patients_list();
@@ -1900,6 +2400,22 @@ Patient* find_patient_by_id(const char *patient_id) {
  *   1. 患者文件为空 → 创建新患者并保存
  *   2. 患者文件有数据但无此用户 → 追加新患者到链表尾部并保存
  *   3. 患者文件已有此用户 → 直接返回成功，无需任何操作
+ */
+/*
+ * ensure_patient_profile — 确保患者档案存在，不存在则创建默认档案
+ * 参数: username — 用户名（用作患者档案的标识）
+ * 返回: SUCCESS — 患者已存在或已成功创建
+ *       ERROR_FILE_IO — 内存分配或文件写入失败
+ *
+ * [中文] 处理三种场景：
+ *   1. 患者文件完全为空 → 创建首个患者记录并保存（新建文件）
+ *   2. 有患者数据但不含此用户 → 追加新记录到链表尾部再保存
+ *   3. 已存在此用户 → 不做任何操作，直接返回 SUCCESS
+ *
+ *   新创建的默认患者信息：name=username, gender="未知", type="普通", stage="初诊"
+ *
+ * [English] Three scenarios: empty file (create first), file without user (append),
+ * user exists (no-op). Default values: name=username, gender="未知", type="普通".
  */
 int ensure_patient_profile(const char *username) {
     PatientNode *head = load_patients_list();
@@ -1965,6 +2481,12 @@ int ensure_patient_profile(const char *username) {
 /*
  * [中文] 根据用户名查找医生 / [English] Find doctor by username
  */
+/*
+ * find_doctor_by_username — 根据用户名查找医生
+ * 参数: username — 医生用户名
+ * 返回: malloc 分配的 Doctor 指针，调用者负责释放
+ *       未找到或加载失败返回 NULL
+ */
 Doctor* find_doctor_by_username(const char *username) {
     DoctorNode *head = load_doctors_list();
     if (!head) {
@@ -1990,6 +2512,12 @@ Doctor* find_doctor_by_username(const char *username) {
 
 /*
  * [中文] 根据医生ID查找医生 / [English] Find doctor by doctor ID
+ */
+/*
+ * find_doctor_by_id — 根据医生ID查找医生
+ * 参数: doctor_id — 医生ID（如 A0001）
+ * 返回: malloc 分配的 Doctor 指针，调用者负责释放
+ *       未找到或加载失败返回 NULL
  */
 Doctor* find_doctor_by_id(const char *doctor_id) {
     DoctorNode *head = load_doctors_list();
@@ -2038,6 +2566,22 @@ Doctor* find_doctor_by_id(const char *doctor_id) {
  *   3. Scan all existing doctors, find max sequence number with the same letter prefix
  *   4. New ID = letter + (max_seq + 1) formatted as 4-digit zero-padded
  *   5. If department_id is invalid or department not in list, default to letter 'X'
+ */
+/*
+ * generate_doctor_id — 根据科室生成医生ID（格式：字母 + 4位序号）
+ * 参数: department_id — 科室ID（决定字母前缀，无效或 NULL 时默认 'X'）
+ *       out_buf       — 输出缓冲区（调用者分配）
+ *       buf_size      — 输出缓冲区大小
+ * 返回: 无（结果通过 out_buf 返回，格式如 "A0001"）
+ *
+ * [中文] 生成算法四步骤：
+ *   1. 在科室列表中查找 department_id 的位置索引
+ *   2. 将索引映射为字母（0→A, 1→B, ...最多25→Z）
+ *   3. 遍历所有医生，统计同字母前缀的最大序号
+ *   4. 格式化输出：字母 + (max_seq + 1) 填充为4位数字
+ *
+ * [English] Four-step algorithm: map department index to letter (A-Z),
+ * find max sequence with same letter prefix, format as letter + 4-digit padding.
  */
 void generate_doctor_id(const char *department_id, char *out_buf, int buf_size) {
     char dept_letter = 'X';  /* 默认字母 / Default letter */
@@ -2127,6 +2671,22 @@ void generate_doctor_id(const char *department_id, char *out_buf, int buf_size) 
  *   4. Iterate all cross-referenced files (appointments, onsite registrations,
  *      medical records, prescriptions), find records referencing old IDs,
  *      replace with new IDs, and save.
+ */
+/*
+ * migrate_doctor_ids — 批量迁移旧版长ID为新的短格式（字母+4位数字）
+ * 参数: 无
+ * 返回: 无
+ *
+ * [中文] 一次性迁移函数，通常在系统升级后首次运行时调用。
+ * 检测所有 ID 长度 > 5 的医生记录，逐一生成新ID并同步更新4个关联文件：
+ *   预约(appointments)、现场挂号(onsite_registrations)、
+ *   病历(medical_records)、处方(prescriptions)
+ *
+ *   映射表最多存储500条 (old_id → new_id)，实际迁移上限为200条。
+ *
+ * [English] One-time migration called after system upgrade. Detects all doctor IDs
+ * with length > 5, generates new short-format IDs, and updates 4 cross-referenced files.
+ * Mapping table capacity: 500, actual migration limit: 200.
  */
 void migrate_doctor_ids(void) {
     DoctorNode *dh = load_doctors_list();
@@ -2284,6 +2844,21 @@ void migrate_doctor_ids(void) {
  * 更新的文件 / Files updated:
  *   - appointments.txt, onsite_registrations.txt, medical_records.txt, prescriptions.txt
  */
+/*
+ * update_doctor_id_across_files — 单个医生的ID变更时，同步更新所有关联文件中的引用
+ * 参数: old_id — 旧的医生ID
+ *       new_id — 新的医生ID
+ * 返回: 无
+ *
+ * [中文] 逐个加载4个关联文件，遍历找到引用 old_id 的记录，替换为 new_id，再保存。
+ * 应用场景：医生更换科室导致ID字母前缀变化（如 A0001 → B0005）。
+ *
+ * 关联文件：appointments, onsite_registrations, medical_records, prescriptions
+ *
+ * [English] Updates 4 cross-referenced files when a single doctor's ID changes
+ * (e.g., due to department change). Loads each file, replaces old_id with new_id,
+ * saves.
+ */
 void update_doctor_id_across_files(const char *old_id, const char *new_id) {
     {
         AppointmentNode *ah = load_appointments_list();
@@ -2334,6 +2909,19 @@ void update_doctor_id_across_files(const char *old_id, const char *new_id) {
 /*
  * [中文] 确保医生档案存在 — 如果不存在则创建默认档案
  * [English] Ensure doctor profile exists — create default profile if not found
+ */
+/*
+ * ensure_doctor_profile — 确保医生档案存在，不存在则创建默认档案
+ * 参数: username — 用户名
+ * 返回: SUCCESS — 已存在或创建成功
+ *       ERROR_FILE_IO — 内存分配或文件写入失败
+ *
+ * [中文] 逻辑与 ensure_patient_profile 相同，分三种情况：
+ *   空文件 → 新建，无此用户 → 追加，已存在 → 跳过。
+ *   默认值：name=username, title="医生"，使用 generate_doctor_id 生成 ID。
+ *
+ * [English] Same three-case logic as ensure_patient_profile.
+ * Defaults: name=username, title="医生", ID auto-generated.
  */
 int ensure_doctor_profile(const char *username) {
     DoctorNode *head = load_doctors_list();
@@ -2390,8 +2978,18 @@ int ensure_doctor_profile(const char *username) {
     return result;
 }
 
-/* 批量确保医生档案: 一次加载数据，检查所有医生用户，追加缺失项
-   Batch ensure doctor profiles: load once, check all doc users, append missing */
+/*
+ * batch_ensure_doctor_profiles — 批量确保所有角色为医生的用户都有对应的医生档案
+ * 参数: user_list — 用户链表头指针（遍历所有 role == ROLE_DOCTOR 的用户）
+ * 返回: 无
+ *
+ * [中文] 与 ensure_doctor_profile 逐个调用的区别：
+ *   此函数一次加载医生数据，遍历所有用户一次完成检查，只有全部检查完
+ *   后才保存。这避免了 N 次文件读写，性能更优。
+ *
+ * [English] Loads doctor data once, checks all users in a single pass,
+ * saves only if changes were made — avoids N rounds of file I/O.
+ */
 void batch_ensure_doctor_profiles(UserNode *user_list) {
     DoctorNode *head = load_doctors_list();
 
@@ -2431,7 +3029,17 @@ void batch_ensure_doctor_profiles(UserNode *user_list) {
     if (head) free_doctor_list(head);
 }
 
-/* 批量确保患者档案 / Batch ensure patient profiles */
+/*
+ * batch_ensure_patient_profiles — 批量确保所有角色为患者的用户都有对应的患者档案
+ * 参数: user_list — 用户链表头指针（遍历所有 role == ROLE_PATIENT 的用户）
+ * 返回: 无
+ *
+ * [中文] 一次加载患者数据，遍历所有用户一次完成检查和追加。
+ * 默认新患者：name=username, gender="未知", type="普通", stage="初诊"
+ *
+ * [English] Loads patient data once, checks all patient-role users in a single pass.
+ * Defaults for new patients: name=username, gender="未知", type="普通".
+ */
 void batch_ensure_patient_profiles(UserNode *user_list) {
     PatientNode *head = load_patients_list();
 
@@ -2481,6 +3089,22 @@ void batch_ensure_patient_profiles(UserNode *user_list) {
  * 与 ensure_doctor_profile 的区别 / Difference from ensure_doctor_profile:
  *   此函数允许在创建时指定完整的医生信息（姓名、职称、科室），
  *   而 ensure_doctor_profile 只使用默认值。
+ */
+/*
+ * create_doctor_profile_with_details — 创建带详细信息的医生档案
+ * 参数: username      — 用户名（用作唯一标识）
+ *       name          — 医生真实姓名
+ *       title         — 职称（如 "主任医师"）
+ *       department_id — 所属科室ID（可能为空字符串或 NULL，决定 ID 前缀字母）
+ * 返回: SUCCESS — 已存在或创建成功
+ *       ERROR_FILE_IO — 内存分配或文件写入失败
+ *
+ * [中文] 与 ensure_doctor_profile 的区别：
+ *   此函数允许在创建时指定完整的医生信息（姓名、职称、科室），
+ *   而非仅使用默认值。doctor_id 通过 generate_doctor_id 根据科室生成。
+ *
+ * [English] Unlike ensure_doctor_profile, this allows specifying full info
+ * (name, title, department) at creation time instead of using defaults.
  */
 int create_doctor_profile_with_details(const char *username, const char *name, const char *title, const char *department_id) {
     DoctorNode *head = load_doctors_list();
@@ -2532,6 +3156,12 @@ int create_doctor_profile_with_details(const char *username, const char *name, c
 /*
  * [中文] 根据药品ID查找药品 / [English] Find drug by drug ID
  */
+/*
+ * find_drug_by_id — 根据药品ID查找药品
+ * 参数: drug_id — 药品ID（如 "D0001"）
+ * 返回: malloc 分配的 Drug 指针，调用者负责释放
+ *       未找到或加载失败返回 NULL
+ */
 Drug* find_drug_by_id(const char *drug_id) {
     DrugNode *head = load_drugs_list();
     if (!head) {
@@ -2559,6 +3189,12 @@ Drug* find_drug_by_id(const char *drug_id) {
  * [中文] 根据科室ID查找科室
  * [English] Find department by department ID (returns malloc'd copy)
  */
+/*
+ * find_department_by_id — 根据科室ID查找科室
+ * 参数: department_id — 科室ID
+ * 返回: malloc 分配的 Department 指针，调用者负责释放
+ *       未找到或加载失败返回 NULL
+ */
 Department* find_department_by_id(const char *department_id) {
     DepartmentNode *head = load_departments_list();
     if (!head) return NULL;
@@ -2580,6 +3216,12 @@ Department* find_department_by_id(const char *department_id) {
  * [中文] 根据病房ID查找病房
  * [English] Find ward by ward ID (returns malloc'd copy)
  */
+/*
+ * find_ward_by_id — 根据病房ID查找病房
+ * 参数: ward_id — 病房ID
+ * 返回: malloc 分配的 Ward 指针，调用者负责释放
+ *       未找到或加载失败返回 NULL
+ */
 Ward* find_ward_by_id(const char *ward_id) {
     WardNode *head = load_wards_list();
     if (!head) return NULL;
@@ -2600,6 +3242,15 @@ Ward* find_ward_by_id(const char *ward_id) {
 /*
  * [中文] 根据患者ID查找预约（返回第一个匹配项）
  * [English] Find appointment by patient ID (returns first match)
+ */
+/*
+ * find_appointments_by_patient — 根据患者ID查找预约（返回第一个匹配项）
+ * 参数: patient_id — 患者ID
+ * 返回: malloc 分配的 Appointment 指针（第一个匹配项），调用者负责释放
+ *       未找到或加载失败返回 NULL
+ *
+ * 注意：仅返回第一次匹配的预约。如需所有预约，应遍历链表。
+ * Note: Returns only the first matching appointment.
  */
 Appointment* find_appointments_by_patient(const char *patient_id) {
     AppointmentNode *head = load_appointments_list();
@@ -2628,6 +3279,12 @@ Appointment* find_appointments_by_patient(const char *patient_id) {
  * [中文] 根据医生ID查找预约（返回第一个匹配项）
  * [English] Find appointment by doctor ID (returns first match)
  */
+/*
+ * find_appointments_by_doctor — 根据医生ID查找预约（返回第一个匹配项）
+ * 参数: doctor_id — 医生ID
+ * 返回: malloc 分配的 Appointment 指针（第一个匹配项），调用者负责释放
+ *       未找到或加载失败返回 NULL
+ */
 Appointment* find_appointments_by_doctor(const char *doctor_id) {
     AppointmentNode *head = load_appointments_list();
     if (!head) {
@@ -2654,6 +3311,12 @@ Appointment* find_appointments_by_doctor(const char *doctor_id) {
 /*
  * [中文] 根据患者ID查找病历（返回第一个匹配项）
  * [English] Find medical record by patient ID (returns first match)
+ */
+/*
+ * find_records_by_patient — 根据患者ID查找病历（返回第一个匹配项）
+ * 参数: patient_id — 患者ID
+ * 返回: malloc 分配的 MedicalRecord 指针（第一个匹配项），调用者负责释放
+ *       未找到或加载失败返回 NULL
  */
 MedicalRecord* find_records_by_patient(const char *patient_id) {
     MedicalRecordNode *head = load_medical_records_list();
@@ -2695,6 +3358,11 @@ MedicalRecord* find_records_by_patient(const char *patient_id) {
  * dermatitis), each with diagnosis, treatment, and exam templates.
  */
 
+/*
+ * create_template_node — 创建医疗模板链表节点（堆分配）
+ * 参数: tmpl — 指向 MedicalTemplate 结构体的指针
+ * 返回: 新分配的 TemplateNode 指针，malloc 失败返回 NULL
+ */
 TemplateNode* create_template_node(const MedicalTemplate *tmpl) {
     TemplateNode *node = (TemplateNode *)malloc(sizeof(TemplateNode));
     if (node) {
@@ -2704,6 +3372,11 @@ TemplateNode* create_template_node(const MedicalTemplate *tmpl) {
     return node;
 }
 
+/*
+ * free_template_list — 释放整个医疗模板链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_template_list(TemplateNode *head) {
     TemplateNode *current = head;
     while (current) {
@@ -2713,6 +3386,11 @@ void free_template_list(TemplateNode *head) {
     }
 }
 
+/*
+ * load_templates_list — 从数据文件加载所有医疗模板到链表
+ * 参数: 无
+ * 返回: 链表头指针，文件不存在时返回 NULL
+ */
 TemplateNode* load_templates_list(void) {
     FILE *fp = fopen(TEMPLATES_FILE, "r");
     if (!fp) return NULL;
@@ -2735,6 +3413,11 @@ TemplateNode* load_templates_list(void) {
     return head;
 }
 
+/*
+ * save_templates_list — 将医疗模板链表保存到数据文件
+ * 参数: head — 模板链表头指针
+ * 返回: SUCCESS / ERROR_FILE_IO
+ */
 int save_templates_list(TemplateNode *head) {
     FILE *fp = fopen(TEMPLATES_FILE, "w");
     if (!fp) return ERROR_FILE_IO;
@@ -2762,6 +3445,19 @@ int save_templates_list(TemplateNode *head) {
  *   T010-T012: 糖尿病 / Diabetes
  *   T013-T015: 肺炎 / Pneumonia
  *   T016-T018: 皮炎 / Dermatitis
+ */
+/*
+ * ensure_default_templates — 初始化默认医疗模板（仅当模板文件为空时写入）
+ * 参数: 无
+ * 返回: SUCCESS — 模板已存在或已成功写入
+ *       ERROR_FILE_IO — 内存分配或文件写入失败
+ *
+ * [中文] 内置18个预置模板（6种常见疾病 x 3类：诊断/治疗/检查）：
+ *   上呼吸道感染(T001-T003)、急性胃肠炎(T004-T006)、高血压(T007-T009)、
+ *   糖尿病(T010-T012)、肺炎(T013-T015)、皮炎(T016-T018)
+ *
+ * [English] 18 preset templates (6 conditions x 3 categories: diagnosis/treatment/exam).
+ * Only writes if the template file is currently empty (idempotent).
  */
 int ensure_default_templates(void) {
     TemplateNode *existing = load_templates_list();
@@ -2817,6 +3513,11 @@ int ensure_default_templates(void) {
  * The column header line is automatically added on first write.
  */
 
+/*
+ * create_log_entry_node — 创建日志记录链表节点（堆分配）
+ * 参数: entry — 指向 LogEntry 结构体的指针
+ * 返回: 新分配的 LogEntryNode 指针，malloc 失败返回 NULL
+ */
 LogEntryNode* create_log_entry_node(const LogEntry *entry) {
     LogEntryNode *node = malloc(sizeof(LogEntryNode));
     if (!node) return NULL;
@@ -2825,6 +3526,11 @@ LogEntryNode* create_log_entry_node(const LogEntry *entry) {
     return node;
 }
 
+/*
+ * free_log_entry_list — 释放整个日志链表
+ * 参数: head — 链表头节点指针
+ * 返回: 无
+ */
 void free_log_entry_list(LogEntryNode *head) {
     while (head) {
         LogEntryNode *next = head->next;
@@ -2833,12 +3539,22 @@ void free_log_entry_list(LogEntryNode *head) {
     }
 }
 
+/*
+ * count_log_entry_list — 统计日志链表节点数量
+ * 参数: head — 链表头节点指针
+ * 返回: 节点总数
+ */
 int count_log_entry_list(LogEntryNode *head) {
     int count = 0;
     while (head) { count++; head = head->next; }
     return count;
 }
 
+/*
+ * load_logs_list — 从数据文件加载所有操作日志到链表
+ * 参数: 无
+ * 返回: 链表头指针，文件不存在时返回 NULL
+ */
 LogEntryNode* load_logs_list(void) {
     FILE *fp = fopen(LOGS_FILE, "r");
     if (!fp) return NULL;
@@ -2875,6 +3591,23 @@ LogEntryNode* load_logs_list(void) {
  *   - 以追加模式 "a" 打开文件（不清除已有内容） / Open in append mode "a" (preserves existing content)
  *   - fseek + ftell 检查文件是否为空，空文件则写入列标题 / Check if file is empty via fseek+ftell, write header if so
  *   - 自动生成日志 ID（L 前缀）和当前时间戳 / Auto-generate log ID (L prefix) and current timestamp
+ */
+/*
+ * append_log — 追加一条操作日志到日志文件
+ * 参数: operator_name — 操作人名称（如 "admin"）
+ *       action        — 操作类型（如 "新增", "修改", "删除"）
+ *       target        — 操作目标类型（如 "医生", "患者", "药品"）
+ *       target_id     — 操作目标ID（如 "A0001"）
+ *       detail        — 操作详情描述
+ * 返回: SUCCESS — 日志写入成功
+ *       ERROR_FILE_IO — 无法打开日志文件
+ *
+ * [中文] 使用追加模式 ("a") 打开文件，确保已有日志不被覆盖。
+ * 自动生成日志ID（L 前缀 + 4位序号）和当前时间戳。
+ * 如果文件为空（首次写入），会先写入列标题行。
+ *
+ * [English] Opens in append mode ("a"), auto-generates log ID and timestamp.
+ * Writes header line on first write (when file is empty).
  */
 int append_log(const char *operator_name, const char *action, const char *target,
                const char *target_id, const char *detail) {
@@ -3139,6 +3872,18 @@ int list_backups(const char ***out_names, int *out_count) {
 /*
  * [中文] 释放备份列表内存
  * [English] Free backup list memory
+ */
+/*
+ * free_backups_list — 释放由 list_backups 分配的备份名称列表内存
+ * 参数: names — 备份名称字符串指针数组（由 list_backups 分配）
+ *       count — 字符串数量
+ * 返回: 无（names == NULL 时直接返回，安全处理空指针）
+ *
+ * [中文] 先逐个释放每个名称字符串，再释放指针数组本身。
+ * 使用 (void *) 强转以消除 const 类型警告。
+ *
+ * [English] Frees each name string individually, then frees the pointer array.
+ * Uses (void *) cast to suppress const-qualifier warnings.
  */
 void free_backups_list(const char **names, int count) {
     if (!names) return;

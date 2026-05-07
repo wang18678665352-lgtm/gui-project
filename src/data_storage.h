@@ -1,6 +1,6 @@
 /*
  * data_storage.h — 数据持久化层 / Data persistence layer
- *
+ *作者：王成烨
  * 本文件定义了系统中所有业务实体的数据结构、链表节点类型和
  * 文件持久化操作接口。数据以制表符分隔的文本文件形式存储在
  * data/ 目录下，内存中使用单向链表表示。
@@ -65,6 +65,7 @@ typedef struct {
     char patient_type[20];          /* 患者类型: 普通/医保/军人 (影响报销比例) */
     char treatment_stage[20];       /* 治疗阶段: 初诊→检查→治疗→复查→康复→出院 */
     bool is_emergency;              /* 是否急诊 (急诊患者自动创建病房呼叫) */
+    char ward_id[MAX_ID];           /* 分配的病房 ID (空=未分配) / assigned ward ID */
 } Patient;
 
 /* 医生 — 持久化到 doctors.txt

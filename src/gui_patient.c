@@ -1,6 +1,6 @@
 /*
  * gui_patient.c — Win32 GUI 患者界面实现 / Win32 GUI patient page implementation
- *
+ *作者：王福源
  * 实现患者角色的所有 GUI 页面 (7 个页面 + 2 个模态对话框):
  *   - 预约挂号 (CreateRegisterPage) — 选择科室→医生→日期→时段, 校验排班后创建预约
  *   - 预约查询 (CreateAppointmentPage) — ListView 展示当前患者所有预约, 支持取消
@@ -2174,20 +2174,14 @@ static LRESULT CALLBACK WardCallDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
                 return 0;
             }
 
-            /* 从现场挂号记录中查找患者当前分配的病房 */
+            /* 从患者档案中查找当前分配的病房 */
             char wardId[MAX_ID] = "";
             {
-                OnsiteRegistrationQueue oq = load_onsite_registration_queue();
-                OnsiteRegistrationNode *orn = oq.front;
-                while (orn) {
-                    if (strcmp(orn->data.patient_id, GetPatientId()) == 0
-                        && orn->data.ward_id[0]) {
-                        strcpy(wardId, orn->data.ward_id);
-                        break;
-                    }
-                    orn = orn->next;
+                Patient *pat = find_patient_by_id(GetPatientId());
+                if (pat) {
+                    if (pat->ward_id[0]) strcpy(wardId, pat->ward_id);
+                    free(pat);
                 }
-                free_onsite_registration_queue(&oq);
             }
 
             char deptId[MAX_ID] = "";
@@ -2394,16 +2388,11 @@ static HWND CreateWardPage(HWND hParent, RECT *rc) {
     /* 查找患者当前分配的病房 */
     char myWardId[MAX_ID] = "";
     {
-        OnsiteRegistrationQueue oq = load_onsite_registration_queue();
-        OnsiteRegistrationNode *orn = oq.front;
-        while (orn) {
-            if (strcmp(orn->data.patient_id, pid) == 0 && orn->data.ward_id[0]) {
-                strcpy(myWardId, orn->data.ward_id);
-                break;
-            }
-            orn = orn->next;
+        Patient *pat = find_patient_by_id(pid);
+        if (pat) {
+            if (pat->ward_id[0]) strcpy(myWardId, pat->ward_id);
+            free(pat);
         }
-        free_onsite_registration_queue(&oq);
     }
     /* 显示我的病房标签 */
     char wardLabel[256];

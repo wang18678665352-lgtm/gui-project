@@ -11,7 +11,7 @@
  *     使用 ANSI DECSC/DECRC 光标保存/恢复实现原位高亮切换
  *   - get_current_time(): 格式化当前时间为 "YYYY-MM-DD HH:MM:SS"
  *   - generate_id(): 生成唯一 ID (时间戳 + 毫秒级计数器 + 随机偏移防冲突)
- *
+ *作者：王成烨
  * Provides low-level console interaction: UTF-8 encoding init, line input with
  * code page conversion, arrow-key menu navigation with in-place highlighting
  * via ANSI cursor save/restore, time formatting, and unique ID generation.

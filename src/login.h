@@ -4,7 +4,7 @@
  * 负责系统的身份认证流程: 用户登录 (角色验证 + 密码 SHA-256 校验)、
  * 新用户注册 (用户名唯一性检查 + 密码确认 + 角色选择)、注销、权限检查、
  * 密码修改与重置、以及将旧明码密码迁移到 SHA-256 哈希的兼容逻辑。
- *
+ *作者：张展赫
  * Handles authentication: login (role verification + SHA-256 password check),
  * registration (username uniqueness + password confirmation + role selection),
  * logout, permission checks, password change/reset, and migration of legacy

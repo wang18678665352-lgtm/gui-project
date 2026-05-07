@@ -1,6 +1,6 @@
 /*
  * gui_doctor.h — GUI 医生工作页面 / GUI doctor workflow pages
- *
+ *作者：王福源
  * 医生角色的 Win32 GUI 界面工厂函数。
  * 根据 viewId 创建对应的子窗口页面 (挂号提醒/接诊问诊/病房呼叫/
  * 急诊管理/治疗进度/诊断模板/开具处方)。

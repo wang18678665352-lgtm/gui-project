@@ -1,6 +1,6 @@
 /*
  * gui_main.h — Win32 GUI 主窗口定义 / Win32 GUI main window definitions
- *
+ *作者：王成烨
  * 定义了 GUI 模式下的主窗口布局常量、导航项 ID 和枚举值、
  * 窗口过程函数声明以及全局变量。
  *

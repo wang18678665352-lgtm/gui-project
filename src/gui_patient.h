@@ -1,6 +1,6 @@
 /*
  * gui_patient.h — GUI 患者功能页面 / GUI patient function pages
- *
+ *作者：王福源
  * 患者角色的 Win32 GUI 界面工厂函数。
  * 根据 viewId 创建对应的子窗口页面 (预约挂号/挂号记录/诊断记录/
  * 处方记录/病房信息/治疗进度/个人资料)。

@@ -1,6 +1,6 @@
 /*
  * gui_admin.c — Win32 GUI 管理员界面实现 / Win32 GUI admin page implementation
- *
+ *作者：王成烨
  * 实现管理员角色的所有 GUI 页面 (10 个页面):
  *   - 科室管理 (CreateDeptPage) — 科室 CRUD (新增/编辑/删除)
  *   - 医生管理 (CreateDoctorMgmtPage) — 医生 CRUD, 含繁忙度字段

@@ -10,7 +10,7 @@
  *   - change_password(): 自主修改密码 (验证旧密码 → 输入新密码 ×2 → 一致性检查)
  *   - admin_reset_password(): 管理员重置密码 (无需旧密码, 操作记录日志)
  *   - migrate_user_passwords(): 明码→SHA-256 迁移 (识别 64 位十六进制哈希)
- *
+ *作者：张展赫
  * Implements authentication: registration with role-specific profile creation,
  * login with SHA-256 verification, logout, permission checks, password change
  * with old-password verification, admin password reset with audit logging,
